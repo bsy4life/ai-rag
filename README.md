@@ -1,71 +1,54 @@
-# 🧠 AI-RAG 聊天助理系統
 
-一個基於 FastAPI + PostgreSQL + LangChain 的企業內部文件問答系統，支援文件向量化、自動 Watchdog 更新、PWA 安裝體驗。
+# 🧠 SanShin AI
 
-![登入畫面](frontend/sanshin_logo.png)
+SanShin AI 是一個內部部署的智慧問答平台，基於 FastAPI + LangChain + OpenAI 架構，支援本地文件問答、多輪對話記憶、自動向量更新與 PWA 安裝。
 
-## 🚀 功能特點
+## 🚀 功能特性
 
-- 📁 自動載入 `backend/data/` 中的 PDF / TXT
-- 🤖 支援 ChatGPT 文本問答與向量查詢
-- 🔎 LangChain + Chroma 向量庫
-- 🛡 JWT 驗證 + 帳號管理介面
-- 📲 支援 PWA（桌面/手機安裝）
-- 🔁 Watchdog 即時監控資料夾
+- ✅ 文件夾自動向量化（支援 PDF / TXT）
+- ✅ 問答記憶記錄，支援多輪上下文
+- ✅ FastAPI 後端整合 OpenAI / Ollama 模型
+- ✅ Service Worker + manifest 完整 PWA 安裝支援
+- ✅ 使用者登入系統（帳號密碼）
+- ✅ Nginx + 自簽 SSL 證書 或 Cloudflare Tunnel 快速內網測試
 
-## 📦 技術架構
-
-- FastAPI + Uvicorn
-- PostgreSQL 資料庫
-- Chroma 向量資料庫
-- LangChain 文本查詢引擎
-- Docker + Nginx + HTTPS（自簽）
-
-## 📂 專案結構
+## 🧱 專案結構
 
 ```
 ai-rag/
-├── backend/
-│   ├── app.py              # FastAPI 主程式
-│   ├── core.py             # 向量庫處理邏輯
-│   ├── data/               # 放入 PDF/TXT 檔案
-│   ├── vectorstore/        # Chroma 向量儲存
-│   └── frontend/           # 靜態頁面 + JS + PWA
-├── docker-compose.yml
-├── nginx.conf
-└── certs/                  # 自簽憑證
+├── backend/               # FastAPI 應用程式
+│   ├── app.py             # 主後端入口
+│   ├── core.py            # 問答邏輯與向量資料庫
+│   ├── data/              # 文件與向量儲存目錄
+│   └── frontend/          # 前端 HTML + JS + PWA 靜態頁面
+├── certs/                 # 自簽憑證（已在 .gitignore 排除）
+├── docker-compose.yml     # 一鍵部署服務（DB、後端、Nginx）
+├── Dockerfile             # FastAPI 建構檔
+├── nginx.conf             # Nginx 設定
+└── .gitignore             # 排除向量檔與憑證等機密
 ```
 
-## 🛠 快速啟動指南
+## 🛠 快速啟動
 
 ```bash
-# 1. 複製 .env 並設定環境變數
-cp .env.example .env
-
-# 2. 建立自簽憑證
-mkdir -p certs
-openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
-  -keyout certs/selfsigned.key \
-  -out certs/selfsigned.crt \
-  -subj "/C=TW/ST=Taiwan/L=Taipei/O=Company/CN=localhost"
-
-# 3. 啟動容器服務
+# 啟動 PostgreSQL + FastAPI + Nginx
 docker compose up --build
 ```
 
-## 🔐 預設管理者帳號
+前端預設可訪問：`https://<你的IP或Cloudflare域名>/frontend/`
 
-| 帳號 | 密碼     |
-|------|----------|
-| admin | admin123 |
-
-## 📌 注意事項
-
-- 向量儲存檔案已加入 `.gitignore`，不建議納入 Git 控管
-- `/backend/data/` 資料夾可自動監控檔案變更並重建向量庫
+> ✅ 若憑證失效可重新產生：`openssl req -x509 -newkey rsa:4096 -sha256 -nodes -keyout selfsigned.key -out selfsigned.crt -days 365 -config san.cnf`
 
 ---
 
-## 📄 License
+## 📱 PWA 測試建議
 
-MIT License © 2025 SanShin AI
+- ✅ 使用 Chrome，訪問合法 HTTPS（自簽需信任）
+- ✅ `manifest.json` + `sw.js` 載入成功
+- ✅ 首次載入會出現「安裝」按鈕，可手動觸發
+
+---
+
+## 👨‍💻 Maintainer
+
+Built with 💙 by SanShin Dev Team
