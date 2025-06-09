@@ -4,6 +4,9 @@
 # 📦 Docker volumes or build cache
 db_data/
 certs/
+*.key
+*.crt
+
 
 # 🐍 Python cache
 __pycache__/
