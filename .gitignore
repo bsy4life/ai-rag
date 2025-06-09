@@ -30,5 +30,6 @@ backend/data/chroma_db_openai/
 *.pkl
 *.parquet
 *.db
-__pycache__/
 *.log
+FETCH_HEAD
+master
