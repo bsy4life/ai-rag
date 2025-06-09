@@ -22,7 +22,7 @@
     }
   </style>
 </head>
-<body class="bg-gray-100 text-gray-800 dark:bg-gray-900 dark:text-gray-100">
+<body class="bg-gray-100 dark:bg-gray-900 flex items-center justify-center min-h-screen">
 
   <!-- PWA 安裝按鈕（右上角，預設隱藏） -->
   <div class="fixed top-4 right-4 z-50">
@@ -30,35 +30,35 @@
       style="display:none;"
       class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded shadow transition"
     >
-      安裝桌面應用程式
+      安裝 SanShin AI
     </button>
   </div>
 
   <!-- ========== 登入畫面 ========== -->
-<div id="login-page" class="h-screen overflow-y-auto flex flex-col items-center justify-center">
-  
-  <!-- ✅ 加入純文字 Logo -->
-  <h1 class="text-3xl font-bold text-blue-600 mt-8 mb-4">SanShin AI</h1>
+  <div id="login-page" class="overflow-y-auto flex flex-col items-center justify-center px-4 w-full max-w-md">
 
-  <div class="bg-white dark:bg-gray-800 p-6 rounded shadow w-80 mb-20">
-    <h2 class="text-xl font-bold dark:text-gray-100 mb-4">請登入</h2>
-    <input id="login-account"
-           class="w-full mb-2 p-2 border rounded bg-gray-50 dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100"
-           placeholder="帳號"
-           type="text" />
-    <input id="login-password"
-           class="w-full mb-4 p-2 border rounded bg-gray-50 dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100"
-           placeholder="密碼"
-           type="password" />
-    <button onclick="login()"
-            class="w-full bg-blue-500 dark:bg-blue-700 text-white py-2 rounded hover:bg-blue-600 dark:hover:bg-blue-800 transition">
-      登入
-    </button>
-    <p id="login-error" class="text-red-500 dark:text-red-400 text-sm mt-2 hidden">
-      登入失敗，請檢查帳號或密碼
-    </p>
+    <!-- ✅ 加入純文字 Logo -->
+    <h1 class="text-3xl font-bold text-blue-600 mt-8 mb-4 text-center">SanShin AI</h1>
+
+    <div class="bg-white dark:bg-gray-800 p-6 rounded-lg shadow-md w-full mb-20">
+      <h2 class="text-xl font-bold dark:text-gray-100 mb-4 text-center">請登入</h2>
+      <input id="login-account"
+             class="w-full mb-3 p-3 border rounded bg-gray-50 dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-400"
+             placeholder="帳號"
+             type="text" />
+      <input id="login-password"
+             class="w-full mb-4 p-3 border rounded bg-gray-50 dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-400"
+             placeholder="密碼"
+             type="password" />
+      <button onclick="login()"
+              class="w-full bg-blue-500 dark:bg-blue-700 text-white py-2 rounded hover:bg-blue-600 dark:hover:bg-blue-800 transition text-lg font-semibold">
+        登入
+      </button>
+      <p id="login-error" class="text-red-500 dark:text-red-400 text-sm mt-3 hidden text-center">
+        登入失敗，請檢查帳號或密碼
+      </p>
+    </div>
   </div>
-</div>
 
   <!-- ========== 聊天主畫面 ========== -->
   <div id="chat-page" class="hidden h-screen">

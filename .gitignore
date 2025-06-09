@@ -22,4 +22,10 @@ Thumbs.db
 
 # 忽略 Chroma 向量資料庫
 backend/data/chroma_db_openai/
-backend/data/chroma_db_openai/
+# 建議加入
+*.bin
+*.pkl
+*.parquet
+*.db
+__pycache__/
+*.log
