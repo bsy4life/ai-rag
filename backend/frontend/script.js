@@ -874,30 +874,35 @@ window.onload = () => {
   if (token) showChat();
 };
 //PWA安裝
+// ✅ 儲存 beforeinstallprompt 事件
+
+
 window.addEventListener('beforeinstallprompt', (e) => {
-  // 只有在頁面真的被瀏覽器判定為可安裝時才觸發
+  console.log('📦 beforeinstallprompt 被觸發');
   e.preventDefault();
   deferredPrompt = e;
+
+  // 顯示自定義安裝按鈕
   const installBtn = document.getElementById('install-btn');
   if (installBtn) installBtn.style.display = 'block';
+
+  // ⭐ 把 click 綁定在這裡，確保 deferredPrompt 已經準備好
+  installBtn.addEventListener('click', async () => {
+    if (!deferredPrompt) return;
+
+    console.log('🖱️ 使用者點了安裝');
+    deferredPrompt.prompt(); // ✅ 使用者手勢內呼叫
+    const result = await deferredPrompt.userChoice;
+    console.log('📣 使用者選擇：', result.outcome);
+
+    // 清除
+    deferredPrompt = null;
+    installBtn.style.display = 'none';
+  }, { once: true }); // ✅ 只綁一次，避免重複 prompt()
 });
 
-document.addEventListener('DOMContentLoaded', () => {
-  const installBtn = document.getElementById('install-btn');
-  if (installBtn) {
-    installBtn.addEventListener('click', async () => {
-      if (deferredPrompt) {
-        deferredPrompt.prompt();
-        const { outcome } = await deferredPrompt.userChoice;
-        if (outcome === 'accepted') {
-          console.log('用戶已接受安裝');
-        }
-        deferredPrompt = null;
-        installBtn.style.display = 'none';
-      }
-    });
-  }
-});
+
+
 // 自動滾動輸入欄位到可見範圍（避免被鍵盤遮住）
 document.querySelectorAll('input').forEach(input => {
   input.addEventListener('focus', () => {
