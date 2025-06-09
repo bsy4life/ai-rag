@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#2563eb">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <link rel="icon" type="image/png" sizes="192x192" href="/frontend/icon/icon-192.png">
+  <link rel="apple-touch-icon" href="/frontend/icon/icon-192.png">
+  <meta charset="utf-8" />
+  <meta content="width=device-width, initial-scale=1.0" name="viewport" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = { darkMode: 'class' }
+  </script>
+  <title>SanShinAI</title>
+  <style>
+    body { font-family: 'Noto Sans TC', sans-serif; }
+    @media (max-width: 768px) {
+      #sidebar { width: 60vw !important; }
+      #main-content { width: 100vw !important; margin-left: 0 !important; }
+      #chat-box div { word-break: break-word; }
+    }
+  </style>
+</head>
+<body class="bg-gray-100 text-gray-800 dark:bg-gray-900 dark:text-gray-100">
+
+  <!-- PWA 安裝按鈕（右上角，預設隱藏） -->
+  <div class="fixed top-4 right-4 z-50">
+    <button id="install-btn"
+      style="display:none;"
+      class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded shadow transition"
+    >
+      安裝桌面應用程式
+    </button>
+  </div>
+
+  <!-- ========== 登入畫面 ========== -->
+  <div id="login-page" class="h-screen flex items-center justify-center">
+    <div class="bg-white dark:bg-gray-800 p-6 rounded shadow w-80">
+      <h2 class="text-xl font-bold dark:text-gray-100 mb-4">請登入</h2>
+      <input id="login-account"
+             class="w-full mb-2 p-2 border rounded bg-gray-50 dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100"
+             placeholder="帳號"
+             type="text" />
+      <input id="login-password"
+             class="w-full mb-4 p-2 border rounded bg-gray-50 dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100"
+             placeholder="密碼"
+             type="password" />
+      <button onclick="login()"
+              class="w-full bg-blue-500 dark:bg-blue-700 text-white py-2 rounded hover:bg-blue-600 dark:hover:bg-blue-800 transition">
+        登入
+      </button>
+      <p id="login-error" class="text-red-500 dark:text-red-400 text-sm mt-2 hidden">
+        登入失敗，請檢查帳號或密碼
+      </p>
+    </div>
+  </div>
+
+  <!-- ========== 聊天主畫面 ========== -->
+  <div id="chat-page" class="hidden h-screen">
+    <!-- 側邊欄遮罩（backdrop），行動版點擊可關閉側邊欄 -->
+    <div id="sidebar-backdrop"
+         class="hidden fixed inset-0 bg-black bg-opacity-50 z-20"
+         onclick="closeSidebar()"></div>
+
+    <div class="flex h-full">
+      <!-- 側邊欄 Drawer -->
+      <div id="sidebar"
+           class="fixed inset-y-0 left-0 transform -translate-x-full w-64 h-full bg-white dark:bg-gray-800 p-4 border-r dark:border-gray-700 overflow-y-auto transition-transform duration-300 z-30 md:static md:translate-x-0 md:w-64 md:border-r">
+        <div class="flex justify-between items-center mb-4">
+          <h2 class="text-lg font-bold dark:text-gray-100">對話列表</h2>
+          <!-- 行動版若無任何對話，隱藏「＋ 新對話」按鈕 -->
+          <button id="mobile-new-chat-btn"
+                  class="text-blue-500 dark:text-blue-300 hover:underline text-sm"
+                  onclick="newChat()">
+            ＋ 新對話
+          </button>
+        </div>
+        <div class="space-y-2" id="chat-list">
+          <!-- JS 會在這裡動態插入對話按鈕 -->
+        </div>
+      </div>
+
+      <!-- 主內容區 -->
+      <div id="main-content" class="flex-1 flex flex-col">
+        <!-- ========= 調整後的「標題列」開始 ========= -->
+        <div class="flex items-center justify-between p-4 border-b dark:border-gray-700 bg-white dark:bg-gray-800 sticky top-0 z-10">
+          <!-- 左側：☰ 切換側邊欄 -->
+          <div class="flex items-center">
+            <button id="sidebar-toggle"
+              class="md:hidden bg-gray-800 dark:bg-gray-200 text-white dark:text-gray-800
+                p-2 w-10 h-10 flex items-center justify-center
+                rounded-lg hover:bg-gray-700 dark:hover:bg-gray-300
+                transition text-2xl"
+              title="切換側邊欄">
+              ☰
+            </button>
+          </div>
+          <!-- 中間：標題 + 夜間模式切換 -->
+          <div class="flex items-center space-x-2">
+            <h1 class="text-xl font-bold dark:text-gray-100">AI 助理</h1>
+            <button id="theme-toggle"
+                    class="text-2xl text-gray-600 dark:text-gray-200 hover:text-gray-800 dark:hover:text-white transition"
+                    title="切換夜間／日間模式">
+              🌙
+            </button>
+          </div>
+          <!-- 右側：使用者下拉選單 -->
+          <div class="relative inline-block text-left">
+            <button id="user-dropdown-btn"
+                    class="flex items-center text-gray-700 dark:text-gray-200 text-sm hover:underline"
+                    onclick="toggleDropdown()">
+              <span class="mr-1">👤</span>
+              <span id="user-info-dropdown"></span>
+              <span class="ml-1">▼</span>
+            </button>
+            <div id="user-dropdown"
+                 class="hidden absolute right-0 mt-2 w-48 bg-white dark:bg-gray-800 border dark:border-gray-700 rounded shadow z-20">
+              <button class="block w-full px-4 py-2 text-sm text-left hover:bg-gray-100 dark:hover:bg-gray-700"
+                      onclick="toggleAdmin()">帳號管理</button>
+              <button class="block w-full px-4 py-2 text-sm text-left hover:bg-gray-100 dark:hover:bg-gray-700"
+                      onclick="changeOwnPassword()">修改密碼</button>
+              <button class="block w-full px-4 py-2 text-sm text-left hover:bg-gray-100 dark:hover:bg-gray-700 text-red-500"
+                      onclick="logout()">登出</button>
+            </div>
+          </div>
+        </div>
+        <!-- ========= 調整後的「標題列」結束 ========= -->
+
+        <!-- 聊天訊息區 (訊息泡泡由 JS 動態插入) -->
+        <div id="chat-box"
+             class="flex-1 overflow-y-auto p-4 space-y-4 bg-gray-50 dark:bg-gray-900">
+        </div>
+
+        <!-- 輸入列 -->
+        <div class="p-4 border-t dark:border-gray-700 flex items-center bg-white dark:bg-gray-800">
+          <input id="input"
+                 class="flex-1 border rounded p-2 bg-gray-100 dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100"
+                 placeholder="輸入問題..." type="text" />
+          <button onclick="sendMessage()"
+                  class="ml-2 bg-blue-500 dark:bg-blue-700 text-white px-4 py-2 rounded hover:bg-blue-600 dark:hover:bg-blue-800 transition">
+            送出
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+  <!-- ========== 帳號管理頁面 ========== -->
+  <div id="admin-page" class="hidden p-6 bg-gray-50 dark:bg-gray-900">
+    <div class="flex justify-between items-center mb-4">
+      <h2 class="text-xl font-bold dark:text-gray-100">帳號管理</h2>
+      <div class="space-x-2">
+        <!-- 1. 加上 id="create-user-btn"， 2. 預設加 hidden 隱藏按鈕 -->
+        <button id="create-user-btn"
+                class="hidden text-sm text-green-600 dark:text-green-400 border border-green-600 dark:border-green-400 px-2 py-1 rounded hover:bg-green-50 dark:hover:bg-gray-700"
+                onclick="openCreateModal()">
+          ➕ 新增使用者
+        </button>
+        <button class="text-sm text-gray-500 dark:text-gray-300"
+                onclick="closeAdmin()">
+          關閉
+        </button>
+      </div>
+    </div>
+
+    <!-- ◆◆◆ 在這裡加上 overflow-x-auto ◆◆◆ -->
+    <div class="overflow-x-auto mb-4">
+      <!-- ◆◆◆ 修改 table class 為 min-w-full table-auto whitespace-nowrap ◆◆◆ -->
+      <table class="min-w-full table-auto whitespace-nowrap border dark:border-gray-700">
+        <thead>
+          <tr class="bg-gray-200 dark:bg-gray-800">
+            <!-- ◆◆◆ 將 p-2 改為 px-2 py-1，並加上 text-left ◆◆◆ -->
+            <th class="border px-2 py-1 dark:border-gray-600 dark:text-gray-100 text-left">帳號</th>
+            <th class="border px-2 py-1 dark:border-gray-600 dark:text-gray-100 text-left">姓名</th>
+            <th class="border px-2 py-1 dark:border-gray-600 dark:text-gray-100 text-left">部門</th>
+            <th class="border px-2 py-1 dark:border-gray-600 dark:text-gray-100 text-left">角色</th>
+            <th class="border px-2 py-1 dark:border-gray-600 dark:text-gray-100 text-left">操作功能</th>
+          </tr>
+        </thead>
+        <tbody id="user-table" class="bg-white dark:bg-gray-800">
+          <!-- JS 會在這裡動態插入使用者資料列 -->
+        </tbody>
+      </table>
+    </div>
+    <!-- ★★★ overflow-x-auto 容器結束 ★★★ -->
+
+    <!-- 分頁區 -->
+    <div id="pagination" class="flex justify-center items-center gap-4"></div>
+
+    <!-- 新增使用者 Modal -->
+    <div id="create-modal"
+         class="hidden fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center z-50">
+      <div class="bg-white dark:bg-gray-800 p-6 rounded shadow w-96 space-y-3">
+        <h2 class="text-lg font-bold dark:text-gray-100">新增使用者</h2>
+        <input id="modal-acc"
+               placeholder="帳號"
+               class="w-full border p-2 rounded bg-gray-50 dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100" />
+        <input id="modal-pw1"
+               placeholder="密碼"
+               type="password"
+               class="w-full border p-2 rounded bg-gray-50 dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100" />
+        <input id="modal-pw2"
+               placeholder="再次輸入密碼"
+               type="password"
+               class="w-full border p-2 rounded bg-gray-50 dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100" />
+        <input id="modal-name"
+               placeholder="姓名"
+               class="w-full border p-2 rounded bg-gray-50 dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100" />
+
+        <!-- 部門下拉，保持原本 max-h-60 overflow-auto -->
+        <select id="modal-dept" class="w-full border p-2 rounded bg-gray-50 dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100 max-h-60 overflow-auto">
+          <option value="" disabled selected>選擇部門</option>
+          <option value="董事長室">董事長室</option>
+          <option value="總經理室">總經理室</option>
+          <option value="管理部">管理部</option>
+          <option value="貿易課">貿易課</option>
+          <option value="採購">採購</option>
+          <option value="空壓產品群">空壓產品群</option>
+          <option value="油壓產品群">油壓產品群</option>
+          <option value="止洩產品群">止洩產品群</option>
+          <option value="台北營業所">台北營業所</option>
+          <option value="台中營業所">台中營業所</option>
+          <option value="台南營業所">台南營業所</option>
+          <option value="高雄營業所">高雄營業所</option>
+          <option value="湖內廠">湖內廠</option>
+          <option value="湖內廠製造課">湖內廠製造課</option>
+          <option value="湖內廠業務課">湖內廠業務課</option>
+          <option value="儲運所">儲運所</option>
+        </select>
+
+        <select id="modal-role"
+                class="w-full border p-2 rounded bg-gray-50 dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100">
+          <option value="user">user</option>
+          <option value="admin">admin</option>
+        </select>
+        <div class="flex justify-end space-x-2 pt-2">
+		  <button class="px-4 py-1 rounded bg-green-600 dark:bg-green-800 text-white hover:bg-green-700 dark:hover:bg-green-900"
+                  onclick="submitCreateUser()">新增</button>
+          <button class="px-4 py-1 rounded bg-gray-300 dark:bg-gray-600 dark:text-gray-100 hover:bg-gray-400 dark:hover:bg-gray-500"
+                  onclick="closeCreateModal()">取消</button>
+
+        </div>
+      </div>
+    </div>
+
+    <!-- 編輯個人資料 Modal -->
+    <div id="edit-profile-modal"
+         class="hidden fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center z-50">
+      <div class="bg-white dark:bg-gray-800 p-6 rounded w-96 space-y-3">
+        <h2 class="font-bold text-lg dark:text-gray-100">修改個人資料</h2>
+        <input id="edit-name"
+               placeholder="姓名"
+               class="w-full border p-2 rounded bg-gray-50 dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100" />
+
+        <!-- 部門下拉，保持原本 max-h-60 overflow-auto -->
+        <select id="edit-dept" class="w-full border p-2 rounded bg-gray-50 dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100 max-h-60 overflow-auto">
+          <option value="董事長室">董事長室</option>
+          <option value="總經理室">總經理室</option>
+          <option value="管理部">管理部</option>
+          <option value="貿易課">貿易課</option>
+          <option value="採購">採購</option>
+          <option value="空壓產品群">空壓產品群</option>
+          <option value="油壓產品群">油壓產品群</option>
+          <option value="止洩產品群">止洩產品群</option>
+          <option value="台北營業所">台北營業所</option>
+          <option value="台中營業所">台中營業所</option>
+          <option value="台南營業所">台南營業所</option>
+          <option value="高雄營業所">高雄營業所</option>
+          <option value="湖內廠">湖內廠</option>
+          <option value="湖內廠製造課">湖內廠製造課</option>
+          <option value="湖內廠業務課">湖內廠業務課</option>
+          <option value="儲運所">儲運所</option>
+        </select>
+
+        <div class="flex justify-end space-x-2">
+          <button class="px-4 py-1 bg-blue-600 dark:bg-blue-800 text-white rounded hover:bg-blue-700 dark:hover:bg-blue-900"
+                  onclick="submitEditProfile()">儲存</button>
+          <button class="px-4 py-1 bg-gray-300 dark:bg-gray-600 dark:text-gray-100 rounded hover:bg-gray-400 dark:hover:bg-gray-500"
+                  onclick="closeProfileModal()">取消</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========== 修改密碼 Modal（必須放在最外層） ========== -->
+  <div id="password-modal"
+       class="hidden fixed inset-0 flex items-center justify-center bg-black bg-opacity-50 z-50">
+    <div class="bg-white dark:bg-gray-800 p-6 rounded shadow w-80 space-y-4">
+      <h2 class="text-lg font-bold dark:text-gray-100">修改密碼</h2>
+      <input id="pw1"
+             class="w-full border p-2 rounded bg-gray-50 dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100"
+             placeholder="新密碼"
+             type="password" />
+      <input id="pw2"
+             class="w-full border p-2 rounded bg-gray-50 dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100"
+             placeholder="再次輸入密碼"
+             type="password" />
+      <div class="flex justify-end space-x-2">
+        <button onclick="submitPasswordChange()"
+                class="px-4 py-1 rounded bg-blue-500 dark:bg-blue-700 text-white hover:bg-blue-600 dark:hover:bg-blue-800 transition">
+          確認
+        </button>
+        <button onclick="closePasswordModal()" class="px-4 py-1 rounded bg-gray-300 dark:bg-gray-600 dark:text-gray-100 hover:bg-gray-400 dark:hover:bg-gray-500">
+          取消
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========== 修改使用者權限 Modal（放在最外層） ========== -->
+  <div id="edit-role-modal"
+       class="hidden fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center z-50">
+    <div class="bg-white dark:bg-gray-800 p-6 rounded w-80 space-y-3">
+      <h2 class="font-bold text-lg dark:text-gray-100">修改使用者權限</h2>
+      <select id="edit-role"
+              class="w-full border p-2 rounded bg-gray-50 dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100">
+        <option value="user">user</option>
+        <option value="admin">admin</option>
+      </select>
+      <div class="flex justify-end space-x-2">
+        <button class="px-4 py-1 bg-green-600 dark:bg-green-800 text-white rounded hover:bg-green-700 dark:hover:bg-green-900"
+                onclick="submitEditRole()">儲存</button>
+        <button class="px-4 py-1 bg-gray-300 dark:bg-gray-600 dark:text-gray-100 rounded hover:bg-gray-400 dark:hover:bg-gray-500"
+                onclick="closeRoleModal()">取消</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 載入外部 JS -->
+  <script src="script.js"></script>
+<script>
+  let deferredPrompt = null; // <-- 只宣告一次
+
+  window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault();
+    deferredPrompt = e;
+    document.getElementById('install-btn').style.display = 'block';
+  });
+
+  document.getElementById('install-btn').addEventListener('click', async () => {
+    if (deferredPrompt) {
+      deferredPrompt.prompt();
+      const { outcome } = await deferredPrompt.userChoice;
+      if (outcome === 'accepted') {
+        console.log('用戶已接受安裝');
+      }
+      deferredPrompt = null;
+      document.getElementById('install-btn').style.display = 'none';
+    }
+  });
+</script>
+
+
+<!-- 📱 安裝提示區塊 -->
+<div id="pwa-tip" class="fixed bottom-4 left-4 right-4 md:left-auto md:right-4 md:bottom-4 bg-white dark:bg-gray-800 border dark:border-gray-600 rounded-lg shadow-lg p-4 z-50 flex items-start space-x-3 text-sm text-gray-700 dark:text-gray-200 hidden">
+  <div class="text-xl">📲</div>
+  <div class="flex-1">
+    <p class="mb-1 font-semibold">將此應用加入主畫面</p>
+    <ul class="list-disc list-inside">
+      <li>點擊瀏覽器選單（⋮ 或 ⌵）</li>
+	  <li>iPhone:「分享」圖示（方框 + ↑）</li>
+      <li>選擇「加入主畫面」或「安裝應用程式」</li>
+    </ul>
+  </div>
+  <button onclick="document.getElementById('pwa-tip').remove()" class="ml-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300">✖</button>
+</div>
+
+
+<script>
+  window.addEventListener('load', () => {
+    const isStandalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone;
+    const isMobile = /Mobi|Android/i.test(navigator.userAgent);
+    if (isMobile && !isStandalone) {
+      const tip = document.getElementById('pwa-tip');
+      if (tip) tip.classList.remove('hidden');
+    }
+  });
+</script>
+
+</body>
+</html>

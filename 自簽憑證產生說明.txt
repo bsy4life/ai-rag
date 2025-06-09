@@ -1,0 +1,10 @@
+# ❗ 請先在專案根目錄執行以下指令產生自簽憑證
+
+mkdir -p certs
+openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+  -keyout certs/selfsigned.key \
+  -out certs/selfsigned.crt \
+  -subj "/C=TW/ST=Taiwan/L=Taipei/O=Company/OU=Dev/CN=localhost"
+
+# 然後就可以啟動服務：
+docker compose up --build
