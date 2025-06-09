@@ -1,0 +1,60 @@
+version: "3.9"
+
+services:
+  db:
+    image: postgres:15
+    restart: always
+    environment:
+      POSTGRES_DB: ai_db
+      POSTGRES_USER: ai_user
+      POSTGRES_PASSWORD: Sanshin-co
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    ports:
+      - "15432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ai_user -d ai_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - appnet
+
+  backend:
+    build: ./backend
+    # ports:  # <-- 不要再加這個！
+    #   - "8000:8000"
+    #network_mode: host    # <--- 加這一行
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./backend/vectorstore:/app/vectorstore
+      - ./backend/data:/app/data
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - SECRET_KEY=${SECRET_KEY}
+      - ALGORITHM=${ALGORITHM}
+      - ACCESS_TOKEN_EXPIRE_MINUTES=${ACCESS_TOKEN_EXPIRE_MINUTES}
+      - OLLAMA_BASE_URL=http://127.0.0.1:11434
+    env_file:
+      - .env
+    networks:
+      - appnet
+  nginx:
+    image: nginx:latest
+    container_name: nginx
+    ports:
+      - "443:443"
+      - "80:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./certs:/etc/nginx/certs:ro
+    depends_on:
+      - backend
+    networks:
+      - appnet
+volumes:
+  db_data:
+networks:
+  appnet:
