@@ -35,26 +35,30 @@
   </div>
 
   <!-- ========== 登入畫面 ========== -->
-  <div id="login-page" class="h-screen flex items-center justify-center">
-    <div class="bg-white dark:bg-gray-800 p-6 rounded shadow w-80">
-      <h2 class="text-xl font-bold dark:text-gray-100 mb-4">請登入</h2>
-      <input id="login-account"
-             class="w-full mb-2 p-2 border rounded bg-gray-50 dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100"
-             placeholder="帳號"
-             type="text" />
-      <input id="login-password"
-             class="w-full mb-4 p-2 border rounded bg-gray-50 dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100"
-             placeholder="密碼"
-             type="password" />
-      <button onclick="login()"
-              class="w-full bg-blue-500 dark:bg-blue-700 text-white py-2 rounded hover:bg-blue-600 dark:hover:bg-blue-800 transition">
-        登入
-      </button>
-      <p id="login-error" class="text-red-500 dark:text-red-400 text-sm mt-2 hidden">
-        登入失敗，請檢查帳號或密碼
-      </p>
-    </div>
+<div id="login-page" class="h-screen overflow-y-auto flex flex-col items-center justify-center">
+  
+  <!-- ✅ 加入純文字 Logo -->
+  <h1 class="text-3xl font-bold text-blue-600 mt-8 mb-4">SanShin AI</h1>
+
+  <div class="bg-white dark:bg-gray-800 p-6 rounded shadow w-80 mb-20">
+    <h2 class="text-xl font-bold dark:text-gray-100 mb-4">請登入</h2>
+    <input id="login-account"
+           class="w-full mb-2 p-2 border rounded bg-gray-50 dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100"
+           placeholder="帳號"
+           type="text" />
+    <input id="login-password"
+           class="w-full mb-4 p-2 border rounded bg-gray-50 dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100"
+           placeholder="密碼"
+           type="password" />
+    <button onclick="login()"
+            class="w-full bg-blue-500 dark:bg-blue-700 text-white py-2 rounded hover:bg-blue-600 dark:hover:bg-blue-800 transition">
+      登入
+    </button>
+    <p id="login-error" class="text-red-500 dark:text-red-400 text-sm mt-2 hidden">
+      登入失敗，請檢查帳號或密碼
+    </p>
   </div>
+</div>
 
   <!-- ========== 聊天主畫面 ========== -->
   <div id="chat-page" class="hidden h-screen">
@@ -98,7 +102,7 @@
           </div>
           <!-- 中間：標題 + 夜間模式切換 -->
           <div class="flex items-center space-x-2">
-            <h1 class="text-xl font-bold dark:text-gray-100">AI 助理</h1>
+            <h1 class="text-xl font-bold dark:text-gray-100">SanShinAI</h1>
             <button id="theme-toggle"
                     class="text-2xl text-gray-600 dark:text-gray-200 hover:text-gray-800 dark:hover:text-white transition"
                     title="切換夜間／日間模式">

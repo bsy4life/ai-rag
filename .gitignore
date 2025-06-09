@@ -18,4 +18,8 @@ __pycache__/
 Thumbs.db
 
 # 📄 日誌 & 執行記錄（視情況忽略）
-*.log
+*.logbackend/data/
+
+# 忽略 Chroma 向量資料庫
+backend/data/chroma_db_openai/
+backend/data/chroma_db_openai/
