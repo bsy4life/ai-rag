@@ -332,28 +332,6 @@
 
   <!-- 載入外部 JS -->
   <script src="script.js"></script>
-<script>
-  let deferredPrompt = null; // <-- 只宣告一次
-
-  window.addEventListener('beforeinstallprompt', (e) => {
-    e.preventDefault();
-    deferredPrompt = e;
-    document.getElementById('install-btn').style.display = 'block';
-  });
-
-  document.getElementById('install-btn').addEventListener('click', async () => {
-    if (deferredPrompt) {
-      deferredPrompt.prompt();
-      const { outcome } = await deferredPrompt.userChoice;
-      if (outcome === 'accepted') {
-        console.log('用戶已接受安裝');
-      }
-      deferredPrompt = null;
-      document.getElementById('install-btn').style.display = 'none';
-    }
-  });
-</script>
-
 
 <!-- 📱 安裝提示區塊 -->
 <div id="pwa-tip" class="fixed bottom-4 left-4 right-4 md:left-auto md:right-4 md:bottom-4 bg-white dark:bg-gray-800 border dark:border-gray-600 rounded-lg shadow-lg p-4 z-50 flex items-start space-x-3 text-sm text-gray-700 dark:text-gray-200 hidden">

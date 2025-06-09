@@ -874,35 +874,54 @@ window.onload = () => {
   if (token) showChat();
 };
 //PWA安裝
-// ✅ 儲存 beforeinstallprompt 事件
-
-
+// ✅ 監聽 PWA 可安裝事件
+let deferredPrompt = null;
 window.addEventListener('beforeinstallprompt', (e) => {
   console.log('📦 beforeinstallprompt 被觸發');
   e.preventDefault();
   deferredPrompt = e;
 
-  // 顯示自定義安裝按鈕
   const installBtn = document.getElementById('install-btn');
-  if (installBtn) installBtn.style.display = 'block';
+  installBtn.style.display = 'inline-block';
 
-  // ⭐ 把 click 綁定在這裡，確保 deferredPrompt 已經準備好
-  installBtn.addEventListener('click', async () => {
-    if (!deferredPrompt) return;
-
+  installBtn.addEventListener('click', () => {
     console.log('🖱️ 使用者點了安裝');
-    deferredPrompt.prompt(); // ✅ 使用者手勢內呼叫
-    const result = await deferredPrompt.userChoice;
-    console.log('📣 使用者選擇：', result.outcome);
 
-    // 清除
-    deferredPrompt = null;
-    installBtn.style.display = 'none';
-  }, { once: true }); // ✅ 只綁一次，避免重複 prompt()
+    // ⚠️ 安全檢查：已經失效就不呼叫 prompt
+    if (!deferredPrompt || typeof deferredPrompt.prompt !== 'function') {
+      console.warn('⚠️ prompt() 不可用（可能已被瀏覽器自動觸發）');
+      return;
+    }
+
+    deferredPrompt.prompt(); // ✅ 只會執行一次
+
+    deferredPrompt.userChoice.then((choiceResult) => {
+      console.log('📥 使用者選擇:', choiceResult.outcome);
+      if (choiceResult.outcome === 'accepted') {
+        console.log('🎉 使用者接受安裝');
+      } else {
+        console.log('❌ 使用者拒絕安裝');
+      }
+      deferredPrompt = null;
+      installBtn.style.display = 'none';
+    }).catch((err) => {
+      console.error('❌ prompt 錯誤:', err);
+    });
+  }, { once: true });
+});
+
+window.addEventListener('appinstalled', () => {
+  console.log('✅ PWA 安裝成功！');
 });
 
 
-
+const installBtn = document.getElementById('install-btn');
+if (installBtn) {
+  installBtn.style.display = 'block';
+  installBtn.addEventListener('click', () => {
+    // 自訂安裝邏輯
+  });
+}
 // 自動滾動輸入欄位到可見範圍（避免被鍵盤遮住）
 document.querySelectorAll('input').forEach(input => {
   input.addEventListener('focus', () => {
