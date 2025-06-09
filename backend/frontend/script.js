@@ -898,4 +898,12 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 });
+// 自動滾動輸入欄位到可見範圍（避免被鍵盤遮住）
+document.querySelectorAll('input').forEach(input => {
+  input.addEventListener('focus', () => {
+    setTimeout(() => {
+      input.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 300);
+  });
+});
 
