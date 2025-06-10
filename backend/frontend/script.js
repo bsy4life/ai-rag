@@ -83,8 +83,8 @@ function renderPagination() {
 
   if (currentPage > 1) {
     const prevBtn = document.createElement('button');
-    prevBtn.innerHTML = '<span class="text-white dark:text-white text-lg font-bold">←</span>';
-    prevBtn.className = 'px-2 py-1 border rounded hover:bg-gray-100 dark:hover:bg-gray-700';
+    prevBtn.textContent = '←';
+    prevBtn.className = 'px-2 py-1 border rounded font-bold text-black dark:text-white bg-white dark:bg-gray-800';
     prevBtn.onclick = () => {
       currentPage--;
       renderUserTable();
@@ -109,8 +109,8 @@ function renderPagination() {
 
   if (currentPage < totalPages) {
     const nextBtn = document.createElement('button');
-    nextBtn.innerHTML = '<span class="text-white dark:text-white text-lg font-bold">→</span>';
-    nextBtn.className = 'px-2 py-1 border rounded hover:bg-gray-100 dark:hover:bg-gray-700';
+    nextBtn.textContent = '→';
+    nextBtn.className = 'px-2 py-1 border rounded font-bold text-black dark:text-white bg-white dark:bg-gray-800';
     nextBtn.onclick = () => {
       currentPage++;
       renderUserTable();
@@ -576,8 +576,7 @@ function newChat() {
   localStorage.setItem('chatId', chatId);
   renderChat();
   renderChatList();
-  //closeSidebar(); // 創建後，行動版自動關閉側邊欄
-  handleResize(); // <--- 新增這一行！
+  closeSidebar(); // 創建後，行動版自動關閉側邊欄
 }
 
 /**
@@ -764,7 +763,6 @@ async function showChat() {
   }
   renderChat();
   renderChatList();
-  handleResize(); // <--- 新增這一行！
   document.getElementById('user-info-dropdown').textContent = localStorage.getItem('name') || '';
 }
 
@@ -804,10 +802,8 @@ function toggleSidebar() {
 function closeSidebar() {
   const sidebar = document.getElementById("sidebar");
   const backdrop = document.getElementById("sidebar-backdrop");
-  if (window.innerWidth < 768) { // 只有手機才關閉側邊欄
-    sidebar.classList.add("-translate-x-full");
-    backdrop.classList.add("hidden");
-  }
+  sidebar.classList.add("-translate-x-full");
+  backdrop.classList.add("hidden");
 }
 
 /**
@@ -865,8 +861,8 @@ window.onload = () => {
   applyTheme(localStorage.getItem('theme') || 'light');
 
   // 監聽視窗 resize，確保桌機版側邊欄展開
-  window.addEventListener("resize", handleResize);
-  handleResize();
+  //window.addEventListener("resize", handleResize);
+  //handleResize();
 
   // 綁定使用者下拉選單裡的項目
   const adminBtn = document.querySelector('[onclick="toggleAdmin()"]');
