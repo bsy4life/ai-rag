@@ -58,15 +58,15 @@ function renderUserTable() {
         <button onclick="deleteUser('${u.account}')" class="text-red-500 dark:text-red-400 hover:underline">刪除帳號</button>
       `;
       }
-      return `
-      <tr class="bg-white dark:bg-gray-800">
-        <td class="border dark:border-gray-600 p-2 text-center dark:text-gray-100">${u.account}</td>
-        <td class="border dark:border-gray-600 p-2 text-center dark:text-gray-100">${u.name}</td>
-        <td class="border dark:border-gray-600 p-2 text-center dark:text-gray-100">${u.department || ''}</td>
-        <td class="border dark:border-gray-600 p-2 text-center dark:text-gray-100">${u.role}</td>
-        <td class="border dark:border-gray-600 p-2 space-x-2 text-center">${ops}</td>
-      </tr>
-    `;
+	return `
+		<tr class="bg-white dark:bg-gray-800">
+		<td class="border dark:border-gray-600 p-2 text-center dark:text-gray-100 break-words min-w-[4rem]">${u.account}</td>
+		<td class="border dark:border-gray-600 p-2 text-center dark:text-gray-100 break-words min-w-[5.5rem]">${u.name}</td>
+		<td class="border dark:border-gray-600 p-2 text-center dark:text-gray-100 break-words min-w-[5.5rem]">${u.department || ''}</td>
+		<td class="border dark:border-gray-600 p-2 text-center dark:text-gray-100 break-words min-w-[3.5rem]">${u.role}</td>
+		<td class="border dark:border-gray-600 p-2 space-x-2 text-center break-words min-w-[7rem] max-w-[8rem]">${ops}</td>
+	  </tr>
+	`;
     })
     .join('');
 
@@ -83,7 +83,7 @@ function renderPagination() {
 
   if (currentPage > 1) {
     const prevBtn = document.createElement('button');
-    prevBtn.textContent = '〈';
+    prevBtn.innerHTML = '<span class="text-white dark:text-white text-lg font-bold">←</span>';
     prevBtn.className = 'px-2 py-1 border rounded hover:bg-gray-100 dark:hover:bg-gray-700';
     prevBtn.onclick = () => {
       currentPage--;
@@ -95,7 +95,11 @@ function renderPagination() {
   for (let i = 1; i <= totalPages; i++) {
     const btn = document.createElement('button');
     btn.textContent = i;
-    btn.className = `px-2 py-1 border rounded ${i === currentPage ? 'bg-blue-200 dark:bg-blue-800' : 'hover:bg-gray-100 dark:hover:bg-gray-700'}`;
+    btn.className = `px-2 py-1 border rounded font-semibold ${
+  i === currentPage
+    ? 'bg-blue-600 text-white dark:text-white'
+    : 'text-gray-800 dark:text-white hover:bg-gray-100 dark:hover:bg-gray-700'
+}`;
     btn.onclick = () => {
       currentPage = i;
       renderUserTable();
@@ -105,7 +109,7 @@ function renderPagination() {
 
   if (currentPage < totalPages) {
     const nextBtn = document.createElement('button');
-    nextBtn.textContent = '〉';
+    nextBtn.innerHTML = '<span class="text-white dark:text-white text-lg font-bold">→</span>';
     nextBtn.className = 'px-2 py-1 border rounded hover:bg-gray-100 dark:hover:bg-gray-700';
     nextBtn.onclick = () => {
       currentPage++;
@@ -506,7 +510,11 @@ function appendMessage(role, text) {
   const div = document.createElement('div');
   div.className = role === 'user' ? 'text-right' : 'text-left';
   const bubble = document.createElement('div');
-  bubble.className = `inline-block p-2 rounded-lg ${role === 'user' ? 'bg-blue-200 dark:bg-blue-800' : 'bg-gray-200 dark:bg-gray-700'} max-w-[75%]`;
+  bubble.className = `inline-block p-2 rounded-lg max-w-[75%] ${
+    role === 'user'
+      ? 'bg-blue-200 dark:bg-blue-800 text-gray-800 dark:text-gray-100'
+      : 'bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-white'
+  }`;
   bubble.textContent = text;
   div.appendChild(bubble);
   chatBox.appendChild(div);
@@ -542,7 +550,7 @@ function renderChatList() {
 
   for (const id in chats) {
     const btn = document.createElement('button');
-    btn.className = `block w-full text-left px-2 py-1 rounded ${id === chatId ? 'bg-blue-100 dark:bg-blue-900' : 'hover:bg-gray-200 dark:hover:bg-gray-700'}`;
+    btn.className = `block w-full text-left px-2 py-1 rounded text-gray-800 dark:text-white ${id === chatId ? 'bg-blue-100 dark:bg-blue-900' : 'hover:bg-gray-200 dark:hover:bg-gray-700'}`;
     btn.innerHTML = `
       <span class="truncate">${chats[id].title || '新對話'}</span>
       <button onclick="renameChat('${id}')" class="ml-1 text-xs text-blue-500 dark:text-blue-300 hover:underline">✏️</button>
@@ -568,7 +576,8 @@ function newChat() {
   localStorage.setItem('chatId', chatId);
   renderChat();
   renderChatList();
-  closeSidebar(); // 創建後，行動版自動關閉側邊欄
+  //closeSidebar(); // 創建後，行動版自動關閉側邊欄
+  handleResize(); // <--- 新增這一行！
 }
 
 /**
@@ -755,6 +764,7 @@ async function showChat() {
   }
   renderChat();
   renderChatList();
+  handleResize(); // <--- 新增這一行！
   document.getElementById('user-info-dropdown').textContent = localStorage.getItem('name') || '';
 }
 
@@ -794,8 +804,10 @@ function toggleSidebar() {
 function closeSidebar() {
   const sidebar = document.getElementById("sidebar");
   const backdrop = document.getElementById("sidebar-backdrop");
-  sidebar.classList.add("-translate-x-full");
-  backdrop.classList.add("hidden");
+  if (window.innerWidth < 768) { // 只有手機才關閉側邊欄
+    sidebar.classList.add("-translate-x-full");
+    backdrop.classList.add("hidden");
+  }
 }
 
 /**
@@ -853,8 +865,8 @@ window.onload = () => {
   applyTheme(localStorage.getItem('theme') || 'light');
 
   // 監聽視窗 resize，確保桌機版側邊欄展開
-  //window.addEventListener("resize", handleResize);
-  //handleResize();
+  window.addEventListener("resize", handleResize);
+  handleResize();
 
   // 綁定使用者下拉選單裡的項目
   const adminBtn = document.querySelector('[onclick="toggleAdmin()"]');
@@ -873,9 +885,16 @@ window.onload = () => {
   const token = localStorage.getItem('token');
   if (token) showChat();
 };
-//PWA安裝
 // ✅ 監聽 PWA 可安裝事件
-let deferredPrompt = null;
+window.addEventListener('beforeinstallprompt', (e) => {
+  console.log('📦 PWA 可安裝，Chrome 將自動處理提示');
+  // ✅ 不再使用 preventDefault()，讓瀏覽器自己跳出提示
+});
+
+window.addEventListener('appinstalled', () => {
+  console.log('✅ PWA 已成功安裝');
+});
+/*let deferredPrompt = null;
 window.addEventListener('beforeinstallprompt', (e) => {
   console.log('📦 beforeinstallprompt 被觸發');
   e.preventDefault();
@@ -909,19 +928,16 @@ window.addEventListener('beforeinstallprompt', (e) => {
     });
   }, { once: true });
 });
-
 window.addEventListener('appinstalled', () => {
   console.log('✅ PWA 安裝成功！');
 });
-
-
 const installBtn = document.getElementById('install-btn');
 if (installBtn) {
   installBtn.style.display = 'block';
   installBtn.addEventListener('click', () => {
     // 自訂安裝邏輯
   });
-}
+}*/
 // 自動滾動輸入欄位到可見範圍（避免被鍵盤遮住）
 document.querySelectorAll('input').forEach(input => {
   input.addEventListener('focus', () => {
