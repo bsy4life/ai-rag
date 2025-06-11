@@ -1,11 +1,11 @@
 {
-  "name": "AI 開發應用",
+  "name": "SanShinAI",
   "short_name": "SanShinAI",
   "start_url": "/frontend/",
   "display": "standalone",
   "background_color": "#f8fafc",
   "theme_color": "#2563eb",
-  "description": "三新AI",
+  "description": "SanShinAI",
   "icons": [
     {
       "src": "/frontend/icon/icon-192.png",
