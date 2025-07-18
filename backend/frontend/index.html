@@ -21,6 +21,19 @@
       #sidebar { width: 70vw !important; }
       #main-content { width: 100vw !important; margin-left: 0 !important; }
     }
+	.loader-dot {
+	  display: inline-block;
+	  width: 1.5em;
+	  height: 1.5em;
+	  border: 3px solid #3b82f6;
+	  border-radius: 50%;
+	  border-top-color: transparent;
+	  animation: spin 0.8s linear infinite;
+	  vertical-align: middle;
+	}
+	@keyframes spin {
+	  to { transform: rotate(360deg); }
+	}
   </style>
 </head>
 <body class="bg-gray-100 dark:bg-gray-900 h-full">

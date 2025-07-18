@@ -1,15 +1,14 @@
 chromadb
 fastapi
 langchain
+langchain-core
 langchain-openai
 langchain-community
-unstructured[local-inference]
-unstructured[pdf]
+unstructured[local-inference,pdf]
 uvicorn[standard]
 openai
 tqdm
 tiktoken
-unstructured
 python-dotenv
 python-magic
 watchdog
@@ -21,3 +20,6 @@ bcrypt==4.0.1
 alembic>=1.13.1
 sentence-transformers
 transformers
+sentencepiece
+sacremoses
+torch

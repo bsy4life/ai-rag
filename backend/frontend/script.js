@@ -506,7 +506,7 @@ const input = document.getElementById('input');
 /**
  * A. 插入訊息泡泡
  */
-function appendMessage(role, text) {
+function appendMessage(role, text, isHtml = false) {
   const div = document.createElement('div');
   div.className = role === 'user' ? 'text-right' : 'text-left';
   const bubble = document.createElement('div');
@@ -515,7 +515,11 @@ function appendMessage(role, text) {
       ? 'bg-blue-200 dark:bg-blue-800 text-gray-800 dark:text-gray-100'
       : 'bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-white'
   }`;
-  bubble.textContent = text;
+  if (isHtml) {
+    bubble.innerHTML = text;
+  } else {
+    bubble.textContent = text;
+  }
   div.appendChild(bubble);
   chatBox.appendChild(div);
   chatBox.scrollTop = chatBox.scrollHeight;
@@ -653,7 +657,8 @@ async function sendMessage() {
   chats[chatId].messages.push({ role: 'user', text });
   document.getElementById('input').value = '';
   appendMessage('user', text);
-  appendMessage('ai', '🤖 思考中...');
+  appendMessage('ai', '思考中 <span id="ai-loader" class="loader-dot"></span>', true); // loading 動畫
+
   try {
     const token = localStorage.getItem('token');
     const username = localStorage.getItem('username');
@@ -673,7 +678,8 @@ async function sendMessage() {
     }
     const data = await res.json();
     const aiResponseBubble = chatBox.lastChild.querySelector('div');
-    aiResponseBubble.textContent = data.answer || '（無回應）';
+    // 這裡改成 innerHTML 以支援 HTML內容（如超連結、br）
+    aiResponseBubble.innerHTML = data.answer || '（無回應）';
     if (data.sources?.length) {
       const note = document.createElement('div');
       note.className = 'text-xs text-gray-500 dark:text-gray-400 mt-1';
@@ -688,11 +694,12 @@ async function sendMessage() {
     }
   } catch {
     const aiResponseBubble = chatBox.lastChild.querySelector('div');
-    aiResponseBubble.textContent = '❌ 錯誤：無法取得回應';
+    aiResponseBubble.innerHTML = '❌ 錯誤：無法取得回應';
     chats[chatId].messages.push({ role: 'ai', text: '❌ 錯誤：無法取得回應' });
   }
   localStorage.setItem('chats', JSON.stringify(chats));
 }
+
 
 /**
  * H. 登入

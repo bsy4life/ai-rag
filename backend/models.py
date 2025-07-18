@@ -16,11 +16,10 @@ class User(Base):
 class ChatLog(Base):
     __tablename__ = "chat_logs"
     id = Column(Integer, primary_key=True, index=True)
-    chat_id = Column(String, index=True)  # UUID or timestamp-based string
+    chat_id = Column(String, index=True)
     title = Column(String, nullable=True)
     user_id = Column(Integer, ForeignKey("users.id"))
     question = Column(Text)
     answer = Column(Text)
     created_at = Column(DateTime, default=datetime.utcnow)
     user = relationship("User")
-    
