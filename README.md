@@ -1,9 +1,9 @@
 
-# 🧠 SanShin AI
+#  SanShin AI
 
 SanShin AI 是一個內部部署的智慧問答平台，基於 FastAPI + LangChain + OpenAI 架構，支援本地文件問答、多輪對話記憶、自動向量更新與 PWA 安裝。
 
-## 🚀 功能特性
+## 功能特性
 
 - ✅ 文件夾自動向量化（支援 PDF / TXT）
 - ✅ 問答記憶記錄，支援多輪上下文
@@ -12,7 +12,7 @@ SanShin AI 是一個內部部署的智慧問答平台，基於 FastAPI + LangCha
 - ✅ 使用者登入系統（帳號密碼）
 - ✅ Nginx + 自簽 SSL 證書 或 Cloudflare Tunnel 快速內網測試
 
-## 🧱 專案結構
+## 專案結構
 
 ```
 ai-rag/
@@ -28,7 +28,7 @@ ai-rag/
 └── .gitignore             # 排除向量檔與憑證等機密
 ```
 
-## 🛠 快速啟動
+## 快速啟動
 
 ```bash
 # 啟動 PostgreSQL + FastAPI + Nginx
