@@ -5,12 +5,12 @@ SanShin AI 是一個內部部署的智慧問答平台，基於 FastAPI + LangCha
 
 ## 功能特性
 
-- ✅ 文件夾自動向量化（支援 PDF / TXT）
-- ✅ 問答記憶記錄，支援多輪上下文
-- ✅ FastAPI 後端整合 OpenAI / Ollama 模型
-- ✅ Service Worker + manifest 完整 PWA 安裝支援
-- ✅ 使用者登入系統（帳號密碼）
-- ✅ Nginx + 自簽 SSL 證書 或 Cloudflare Tunnel 快速內網測試
+- 文件夾自動向量化（支援 PDF / TXT）
+- 問答記憶記錄，支援多輪上下文
+- FastAPI 後端整合 OpenAI / Ollama 模型
+- Service Worker + manifest 完整 PWA 安裝支援
+- 使用者登入系統（帳號密碼）
+- Nginx + 自簽 SSL 證書 或 Cloudflare Tunnel 快速內網測試
 
 ## 專案結構
 
