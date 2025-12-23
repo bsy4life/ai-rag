@@ -1,48 +1,42 @@
-# Python
+# Python / venv
+**/venv/
+backend/.venv/
+**/.venv/
+.venv/
 __pycache__/
 *.pyc
-*.pyo
-*.pyd
-*.log
-*.tmp
 
-# Virtualenv
-venv/
-.venv/
-env/
+# Data / vectordb / generated
+backend/data/
+backend/data/**
+backend/vectorstore/
+backend/**/vectordb*/
+**/vectordb*/
+**/vectorstore*/
+**/chroma_db*/
+**/*.bin
+**/*.sqlite3
+**/keyword_index.json
+**/metadata.json
 
-# OS / Editor
-.DS_Store
-.idea/
-.vscode/
-
-# Local configs / secrets
+# Certs / keys (強烈不建議進版控)
+certs/
+install-ai-cert/
+*.pem
+*.key
+*.crt
+.env
 *.env
-.env.*
-users.txt
-*secret*
-*token*
-*password*
 
-# Vector DB / Chroma / FAISS / caches
-data/chroma_db*/
-data/vectordb*/
-vectorstore/
-*.sqlite3
-*.pickle
-*.pkl
-*.faiss
-last_hash.txt
+# OS / tooling
+.DS_Store
+Thumbs.db
 
-# Data folders (keep a placeholder with .gitkeep if needed)
-data/business/
-data/markdown/
-data/pdfs/
-data/personal_kb/
-data/clear/
+# vector db / indexes / caches (看你實際路徑)
+**/*.faiss
+**/*.pkl
 
-# Backups / zips
-*.zip
+# backup / dump files
+*.backup
 *.bak
-*backup*
-EOF
+*.sql
