@@ -2,339 +2,729 @@
 <html lang="zh-Hant">
 <head>
   <link rel="manifest" href="manifest.json">
-  <meta name="theme-color" content="#2563eb">
+  <meta name="theme-color" content="#d97706">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <link rel="icon" type="image/png" sizes="192x192" href="/frontend/icon/icon-192.png">
   <link rel="apple-touch-icon" href="/frontend/icon/icon-192.png">
   <meta charset="utf-8" />
-  <meta content="width=device-width, initial-scale=1.0" name="viewport" />
+  <meta content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" name="viewport" />
   <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/4.3.0/marked.min.js"></script>
+  
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  
   <script>
-    tailwind.config = { darkMode: 'class' }
-  </script>
-  <title>SanShinAI</title>
-  <style>
-    html, body { height: 100%; }
-    body { font-family: 'Noto Sans TC', sans-serif; height: 100%; }
-    #sidebar { transition: transform 0.3s; }
-    @media (max-width: 768px) {
-      #sidebar { width: 70vw !important; }
-      #main-content { width: 100vw !important; margin-left: 0 !important; }
+    tailwind.config = { 
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            claude: {
+              50: '#fffbeb', 100: '#fef3c7', 200: '#fde68a', 300: '#fcd34d',
+              400: '#fbbf24', 500: '#d97706', 600: '#b45309', 700: '#92400e',
+              800: '#78350f', 900: '#451a03',
+            },
+            sand: {
+              50: '#fafaf9', 100: '#f5f5f4', 200: '#e7e5e4', 300: '#d6d3d1',
+              400: '#a8a29e', 500: '#78716c', 600: '#57534e', 700: '#44403c',
+              800: '#292524', 900: '#1c1917',
+            }
+          },
+          fontFamily: {
+            sans: ['Noto Sans TC', 'system-ui', 'sans-serif'],
+            mono: ['JetBrains Mono', 'monospace'],
+          }
+        }
+      }
     }
-	.loader-dot {
-	  display: inline-block;
-	  width: 1.5em;
-	  height: 1.5em;
-	  border: 3px solid #3b82f6;
-	  border-radius: 50%;
-	  border-top-color: transparent;
-	  animation: spin 0.8s linear infinite;
-	  vertical-align: middle;
-	}
-	@keyframes spin {
-	  to { transform: rotate(360deg); }
-	}
+  </script>
+  
+  <title>SanShin AI</title>
+  
+  <style>
+    html, body { height: 100%; overflow: hidden; }
+    body { font-family: 'Noto Sans TC', system-ui, sans-serif; }
+    
+    /* 側邊欄 */
+    #sidebar { 
+      transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+    @media (max-width: 768px) {
+      #sidebar { width: 280px !important; }
+    }
+    
+    /* 對話項目 */
+    .chat-item {
+      transition: all 0.2s ease;
+      border-radius: 10px;
+      padding: 10px 12px;
+      margin: 2px 8px;
+      cursor: pointer;
+      border-left: 3px solid transparent;
+    }
+    .chat-item:hover { background: rgba(217, 119, 6, 0.08); }
+    .chat-item.active {
+      background: rgba(217, 119, 6, 0.12);
+      border-left-color: #d97706;
+    }
+    .dark .chat-item:hover { background: rgba(217, 119, 6, 0.15); }
+    .dark .chat-item.active { background: rgba(217, 119, 6, 0.2); }
+    
+    /* 訊息氣泡 */
+    .message-bubble { animation: slideIn 0.3s ease-out; }
+    @keyframes slideIn {
+      from { opacity: 0; transform: translateY(8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    
+    .user-bubble {
+      background: linear-gradient(135deg, #d97706 0%, #b45309 100%);
+      color: white;
+      border-radius: 18px 18px 4px 18px;
+      box-shadow: 0 2px 8px rgba(217, 119, 6, 0.25);
+    }
+    
+    .ai-bubble {
+      background: white;
+      border: 1px solid #e7e5e4;
+      border-radius: 18px 18px 18px 4px;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.04);
+    }
+    .dark .ai-bubble {
+      background: #292524;
+      border-color: #44403c;
+    }
+    
+    /* 輸入區域 */
+    .input-wrapper {
+      background: white;
+      border: 2px solid #e7e5e4;
+      border-radius: 20px;
+      transition: all 0.2s ease;
+    }
+    .input-wrapper:focus-within {
+      border-color: #d97706;
+      box-shadow: 0 0 0 3px rgba(217, 119, 6, 0.1);
+    }
+    .dark .input-wrapper {
+      background: #292524;
+      border-color: #44403c;
+    }
+    .dark .input-wrapper:focus-within {
+      border-color: #d97706;
+      box-shadow: 0 0 0 3px rgba(217, 119, 6, 0.2);
+    }
+    
+    /* 模式選擇器 - 修正版 */
+    .mode-selector {
+      display: inline-flex;
+      gap: 4px;
+      padding: 4px;
+      background: #f5f5f4;
+      border-radius: 12px;
+    }
+    .dark .mode-selector { background: #44403c; }
+    
+    .mode-btn {
+      padding: 6px 12px;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      color: #78716c;
+      background: transparent;
+      border: none;
+      white-space: nowrap;
+    }
+    .mode-btn:hover {
+      color: #d97706;
+      background: rgba(217, 119, 6, 0.08);
+    }
+    .mode-btn.active {
+      background: white;
+      color: #d97706;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    }
+    .dark .mode-btn { color: #a8a29e; }
+    .dark .mode-btn.active {
+      background: #57534e;
+      color: #fbbf24;
+    }
+    
+    /* 載入動畫 */
+    .typing-dots { display: flex; gap: 4px; padding: 4px 0; }
+    .typing-dot {
+      width: 8px; height: 8px;
+      background: #d97706;
+      border-radius: 50%;
+      animation: bounce 1.4s ease-in-out infinite;
+    }
+    .typing-dot:nth-child(2) { animation-delay: 0.2s; }
+    .typing-dot:nth-child(3) { animation-delay: 0.4s; }
+    @keyframes bounce {
+      0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
+      30% { transform: translateY(-6px); opacity: 1; }
+    }
+    
+    /* Markdown 樣式 */
+    .md-content .table-wrapper {
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+      margin: 12px 0;
+      border-radius: 8px;
+      border: 1px solid #e7e5e4;
+    }
+    .dark .md-content .table-wrapper { border-color: #44403c; }
+    .md-content table {
+      border-collapse: collapse; width: 100%; min-width: 400px;
+      font-size: 14px;
+    }
+    @media (max-width: 640px) {
+      .md-content table { font-size: 12px; min-width: 320px; }
+      .md-content th, .md-content td { padding: 8px 10px; }
+    }
+    .md-content th, .md-content td {
+      border: 1px solid #e7e5e4; padding: 10px 12px; text-align: left;
+      white-space: nowrap;
+    }
+    .md-content td:last-child, .md-content th:last-child {
+      white-space: normal; /* 最後一欄可換行 */
+    }
+    .dark .md-content th, .dark .md-content td { border-color: #44403c; }
+    .md-content th {
+      background: #fef3c7; font-weight: 600; color: #78350f;
+    }
+    .dark .md-content th { background: #44403c; color: #fde68a; }
+    .md-content tr:nth-child(even) { background: rgba(0,0,0,0.02); }
+    .dark .md-content tr:nth-child(even) { background: rgba(255,255,255,0.02); }
+    .md-content h2 { font-size: 1.1rem; font-weight: 600; color: #d97706; margin: 16px 0 8px; }
+    .md-content h3 { font-size: 1rem; font-weight: 600; margin: 12px 0 6px; }
+    .dark .md-content h2 { color: #fbbf24; }
+    .md-content code {
+      background: rgba(217,119,6,0.1); color: #b45309;
+      padding: 2px 6px; border-radius: 4px; font-family: 'JetBrains Mono', monospace;
+    }
+    .dark .md-content code { background: rgba(217,119,6,0.2); color: #fbbf24; }
+    .md-content ul, .md-content ol { margin: 8px 0; padding-left: 20px; }
+    .md-content li { margin: 4px 0; line-height: 1.5; }
+    .md-content p { margin: 8px 0; line-height: 1.6; }
+    
+    /* 來源標籤 */
+    .src-tag {
+      display: inline-flex; align-items: center; gap: 4px;
+      padding: 3px 8px; border-radius: 12px; font-size: 11px; font-weight: 500;
+    }
+    .src-tech { background: #dbeafe; color: #1e40af; }
+    .src-biz { background: #dcfce7; color: #166534; }
+    .src-mix { background: #fef3c7; color: #92400e; }
+    .src-personal { background: #f3e8ff; color: #7c3aed; }
+    .dark .src-tech { background: #1e3a8a; color: #93c5fd; }
+    .dark .src-biz { background: #166534; color: #86efac; }
+    .dark .src-mix { background: #78350f; color: #fde68a; }
+    .dark .src-personal { background: #5b21b6; color: #c4b5fd; }
+    
+    /* 拖放區域 */
+    #drop-zone.drag-over {
+      border-color: #d97706;
+      background: rgba(217, 119, 6, 0.05);
+    }
+    
+    /* 文件類型按鈕 */
+    .doc-type-btn {
+      color: #78716c;
+      background: transparent;
+      border: none;
+    }
+    .doc-type-btn:hover {
+      color: #d97706;
+    }
+    .doc-type-btn.active {
+      background: white;
+      color: #d97706;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+    }
+    .dark .doc-type-btn { color: #a8a29e; }
+    .dark .doc-type-btn.active {
+      background: #57534e;
+      color: #fbbf24;
+    }
+    
+    /* 文件項目 */
+    .file-item:hover .upload-status { opacity: 0; }
+    
+    /* 按鈕 */
+    .btn-primary {
+      background: linear-gradient(135deg, #d97706 0%, #b45309 100%);
+      color: white; padding: 10px 20px; border-radius: 10px;
+      font-weight: 500; transition: all 0.2s ease;
+    }
+    .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(217,119,6,0.3); }
+    
+    .btn-ghost {
+      padding: 8px 12px; border-radius: 8px; transition: all 0.2s ease;
+      color: #57534e; background: transparent;
+    }
+    .btn-ghost:hover { background: rgba(0,0,0,0.05); }
+    .dark .btn-ghost { color: #a8a29e; }
+    .dark .btn-ghost:hover { background: rgba(255,255,255,0.08); }
+    
+    /* 捲軸 */
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.15); border-radius: 3px; }
+    .dark ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); }
+    
+    /* Modal */
+    .modal-overlay {
+      background: rgba(0,0,0,0.5); backdrop-filter: blur(4px);
+    }
+    .modal-content {
+      background: white; border-radius: 16px;
+      box-shadow: 0 20px 50px rgba(0,0,0,0.2);
+    }
+    .dark .modal-content { background: #292524; }
+    
+    .form-input {
+      width: 100%; padding: 10px 14px; border-radius: 10px;
+      border: 2px solid #e7e5e4; background: #fafaf9;
+      transition: all 0.2s ease;
+    }
+    .form-input:focus {
+      outline: none; border-color: #d97706; background: white;
+    }
+    .dark .form-input {
+      background: #1c1917; border-color: #44403c; color: white;
+    }
+    .dark .form-input:focus { background: #292524; }
+    
+    /* 知識庫面板 */
+    .kb-card {
+      background: white; border: 1px solid #e7e5e4; border-radius: 12px;
+      padding: 16px; transition: all 0.2s ease;
+    }
+    .kb-card:hover { border-color: #d97706; box-shadow: 0 4px 12px rgba(217,119,6,0.1); }
+    .dark .kb-card { background: #292524; border-color: #44403c; }
+    .dark .kb-card:hover { border-color: #d97706; }
   </style>
 </head>
-<body class="bg-gray-100 dark:bg-gray-900 h-full">
 
-  <!-- ========== 登入畫面 ========== -->
-  <div id="login-page" class="flex flex-col justify-center items-center h-screen w-full bg-gray-100 dark:bg-gray-900">
-    <h1 class="text-3xl font-bold text-blue-600 mb-6 text-center">SanShin AI</h1>
-    <div class="bg-white dark:bg-gray-800 p-6 rounded-lg shadow-md w-full max-w-sm">
-      <h2 class="text-xl font-bold dark:text-gray-100 mb-4 text-center">請登入</h2>
-      <input id="login-account"
-             class="w-full mb-3 p-3 border rounded bg-gray-50 dark:bg-gray-700 dark:border-gray-600 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-400"
-             placeholder="帳號"
-             type="text" />
-      <input id="login-password"
-             class="w-full mb-4 p-3 border rounded bg-gray-50 dark:bg-gray-700 dark:border-gray-600 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-400"
-             placeholder="密碼"
-             type="password" />
-      <button onclick="login()"
-              class="w-full bg-blue-500 dark:bg-blue-700 text-white py-2 rounded hover:bg-blue-600 dark:hover:bg-blue-800 transition text-lg font-semibold">
-        登入
-      </button>
-      <p id="login-error" class="text-red-500 dark:text-red-400 text-sm mt-3 hidden text-center">
-        登入失敗，請檢查帳號或密碼
-      </p>
+<body class="h-full bg-sand-50 dark:bg-sand-900">
+  <!-- ========== 登入頁面 ========== -->
+  <div id="login-page" class="min-h-screen flex items-center justify-center p-4 bg-gradient-to-br from-sand-100 via-claude-50 to-sand-100 dark:from-sand-900 dark:via-sand-800 dark:to-sand-900">
+    <div class="modal-content w-full max-w-sm p-8">
+      <div class="text-center mb-6">
+        <img src="/frontend/icon/logo.png" alt="SanShin AI" class="w-20 h-20 mx-auto mb-4 rounded-xl shadow-lg">
+        <h1 class="text-xl font-bold text-sand-800 dark:text-sand-100">SanShin AI</h1>
+        <p class="text-sand-500 text-sm mt-1">智慧助理系統</p>
+      </div>
+      
+      <div class="space-y-4">
+        <input id="login-account" type="text" class="form-input" placeholder="帳號" />
+        <input id="login-password" type="password" class="form-input" placeholder="密碼" onkeypress="if(event.key==='Enter') login()" />
+        <p id="login-error" class="hidden text-red-500 text-sm text-center">帳號或密碼錯誤</p>
+        <button onclick="login()" class="btn-primary w-full">登入</button>
+      </div>
     </div>
   </div>
 
-  <!-- ========== 主畫面 ========== -->
-  <div id="chat-page" class="hidden h-full">
-    <div id="sidebar-backdrop"
-         class="hidden fixed inset-0 bg-black bg-opacity-50 z-20"
-         onclick="closeSidebar()"></div>
-    <div class="flex w-full h-screen">
-      <!-- 側邊欄 -->
-      <div id="sidebar"
-           class="fixed inset-y-0 left-0 transform -translate-x-full w-64 h-full bg-white dark:bg-gray-800 p-4 border-r dark:border-gray-700 overflow-y-auto z-30 md:static md:translate-x-0 md:w-64">
-        <div class="flex justify-between items-center mb-4">
-          <h2 class="text-lg font-bold text-gray-900 dark:text-white">對話列表</h2>
-          <button id="mobile-new-chat-btn"
-                  class="text-blue-500 dark:text-blue-300 hover:underline text-sm"
-                  onclick="newChat()">
-            ＋ 新對話
-          </button>
+  <!-- ========== 主頁面 ========== -->
+  <div id="chat-page" class="hidden h-full flex">
+    <!-- 側邊欄遮罩 -->
+    <div id="sidebar-backdrop" class="hidden fixed inset-0 bg-black/40 z-40 md:hidden" onclick="closeSidebar()"></div>
+    
+    <!-- 側邊欄 -->
+    <aside id="sidebar" class="fixed md:relative z-50 w-64 h-full -translate-x-full md:translate-x-0 flex flex-col bg-sand-50 dark:bg-sand-800 border-r border-sand-200 dark:border-sand-700">
+      <!-- Logo -->
+      <div class="p-4 border-b border-sand-200 dark:border-sand-700">
+        <div class="flex items-center gap-3">
+          <img src="/frontend/icon/logo.png" alt="SanShin AI" class="w-9 h-9 rounded-lg">
+          <div>
+            <h1 class="font-semibold text-sand-800 dark:text-sand-100">SanShin AI</h1>
+          </div>
         </div>
-        <div class="space-y-2" id="chat-list"></div>
       </div>
-      <!-- 內容區 -->
-      <div id="main-content" class="flex-1 flex flex-col min-w-0 ml-0 md:ml-0">
-        <!-- 頂部列 -->
-        <div class="flex items-center justify-between p-4 border-b dark:border-gray-700 bg-white dark:bg-gray-800 sticky top-0 z-10">
-          <div class="flex items-center">
-            <button id="sidebar-toggle"
-              class="md:hidden bg-gray-800 dark:bg-gray-200 text-white dark:text-gray-800
-                p-2 w-10 h-10 flex items-center justify-center
-                rounded-lg hover:bg-gray-700 dark:hover:bg-gray-300
-                transition text-2xl"
-              title="切換側邊欄">
-              ☰
+      
+      <!-- 新對話按鈕 -->
+      <button onclick="newChat()" class="m-2 p-3 flex items-center gap-2 text-sm font-medium text-claude-600 dark:text-claude-400 bg-claude-50 dark:bg-claude-900/30 hover:bg-claude-100 dark:hover:bg-claude-900/50 rounded-lg transition">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path>
+        </svg>
+        新對話
+      </button>
+      
+      <!-- 對話列表 -->
+      <div class="flex-1 overflow-y-auto" id="chat-list"></div>
+      
+      <!-- 底部功能 -->
+      <div class="p-3 border-t border-sand-200 dark:border-sand-700 space-y-1">
+        <!-- 知識庫按鈕 -->
+        <button onclick="openKnowledgeBase()" class="btn-ghost w-full flex items-center gap-3 text-sm">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path>
+          </svg>
+          知識庫
+        </button>
+        
+        <!-- 深色模式 -->
+        <button id="theme-toggle" class="btn-ghost w-full flex items-center gap-3 text-sm">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"></path>
+          </svg>
+          <span class="dark:hidden">深色模式</span>
+          <span class="hidden dark:inline">淺色模式</span>
+        </button>
+        
+        <!-- 用戶選單 -->
+        <div class="relative">
+          <button onclick="toggleDropdown()" class="btn-ghost w-full flex items-center gap-3 text-sm">
+            <div class="w-7 h-7 rounded-full bg-gradient-to-br from-claude-400 to-claude-600 flex items-center justify-center text-white text-xs font-medium" id="user-avatar">U</div>
+            <span id="user-info-dropdown" class="flex-1 text-left truncate">用戶</span>
+            <svg class="w-4 h-4 text-sand-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+            </svg>
+          </button>
+          
+          <div id="user-dropdown" class="hidden absolute bottom-full left-0 right-0 mb-2 modal-content p-2 rounded-xl shadow-lg">
+            <button onclick="toggleAdmin()" class="w-full text-left px-3 py-2 text-sm text-sand-700 dark:text-sand-300 hover:bg-sand-100 dark:hover:bg-sand-700 rounded-lg">帳號管理</button>
+            <button onclick="changeOwnPassword()" class="w-full text-left px-3 py-2 text-sm text-sand-700 dark:text-sand-300 hover:bg-sand-100 dark:hover:bg-sand-700 rounded-lg">修改密碼</button>
+            <hr class="my-1 border-sand-200 dark:border-sand-600">
+            <button onclick="logout()" class="w-full text-left px-3 py-2 text-sm text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg">登出</button>
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- 主內容 -->
+    <main class="flex-1 flex flex-col h-full overflow-hidden">
+      <!-- 頂部 -->
+      <header class="flex items-center gap-3 px-4 py-3 border-b border-sand-200 dark:border-sand-700 bg-white/80 dark:bg-sand-800/80 backdrop-blur">
+        <button id="sidebar-toggle" class="md:hidden btn-ghost p-2">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"></path>
+          </svg>
+        </button>
+        <h2 id="chat-title" class="font-medium text-sand-800 dark:text-sand-100 truncate flex-1">新對話</h2>
+      </header>
+      
+      <!-- 對話區 -->
+      <div id="chat-box" class="flex-1 overflow-y-auto p-4">
+        <!-- 歡迎畫面 -->
+        <div id="welcome-screen" class="h-full flex flex-col items-center justify-center text-center px-4">
+          <div class="w-16 h-16 rounded-2xl bg-gradient-to-br from-claude-100 to-claude-200 dark:from-claude-800 dark:to-claude-700 flex items-center justify-center mb-4">
+            <svg class="w-8 h-8 text-claude-600 dark:text-claude-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z"></path>
+            </svg>
+          </div>
+          <h2 class="text-xl font-semibold text-sand-800 dark:text-sand-100 mb-2">歡迎使用 SanShin AI</h2>
+          <p class="text-sand-500 max-w-md mb-6 text-sm">我可以協助您查詢技術文件、業務資料，或回答各種問題</p>
+          <div class="grid grid-cols-2 gap-3 max-w-sm w-full">
+            <button onclick="setExample('MXJ4 規格是什麼？')" class="p-3 text-left rounded-xl bg-white dark:bg-sand-800 border border-sand-200 dark:border-sand-700 hover:border-claude-400 transition text-sm">
+              <div class="font-medium text-sand-800 dark:text-sand-200">🔧 技術查詢</div>
+              <div class="text-xs text-sand-500 mt-1">MXJ4 規格是什麼？</div>
+            </button>
+            <button onclick="setExample('列出東台精機的活動')" class="p-3 text-left rounded-xl bg-white dark:bg-sand-800 border border-sand-200 dark:border-sand-700 hover:border-claude-400 transition text-sm">
+              <div class="font-medium text-sand-800 dark:text-sand-200">📊 業務查詢</div>
+              <div class="text-xs text-sand-500 mt-1">列出東台精機的活動</div>
             </button>
           </div>
-          <div class="flex items-center space-x-2">
-            <h1 class="text-xl font-bold text-gray-900 dark:text-white">SanShinAI</h1>
-            <button id="theme-toggle"
-                    class="text-2xl text-gray-600 dark:text-gray-200 hover:text-gray-800 dark:hover:text-white transition"
-                    title="切換夜間／日間模式">
-              🌙
-            </button>
-          </div>
-          <div class="relative inline-block text-left">
-            <button id="user-dropdown-btn"
-                    class="flex items-center text-gray-700 dark:text-white text-sm hover:underline"
-                    onclick="toggleDropdown()">
-              <span class="mr-1">👤</span>
-              <span id="user-info-dropdown"></span>
-              <span class="ml-1">▼</span>
-            </button>
-            <div id="user-dropdown"
-                 class="hidden absolute right-0 mt-2 w-48 bg-white dark:bg-gray-800 border dark:border-gray-700 rounded shadow z-20">
-              <button class="block w-full px-4 py-2 text-sm text-left hover:bg-gray-100 dark:hover:bg-gray-700 dark:text-white"
-                      onclick="toggleAdmin()">帳號管理</button>
-              <button class="block w-full px-4 py-2 text-sm text-left hover:bg-gray-100 dark:hover:bg-gray-700 dark:text-white"
-                      onclick="changeOwnPassword()">修改密碼</button>
-              <button class="block w-full px-4 py-2 text-sm text-left hover:bg-gray-100 dark:hover:bg-gray-700 text-red-500"
-                      onclick="logout()">登出</button>
+        </div>
+      </div>
+      
+      <!-- 輸入區 -->
+      <div class="p-4 bg-white dark:bg-sand-800 border-t border-sand-200 dark:border-sand-700">
+        <div class="max-w-3xl mx-auto space-y-3">
+          <!-- 模式選擇 -->
+          <div class="flex justify-center">
+            <div class="mode-selector">
+              <button class="mode-btn active" data-mode="smart" onclick="setMode('smart')">🧠 智慧</button>
+              <button class="mode-btn" data-mode="technical" onclick="setMode('technical')">🔧 技術</button>
+              <button class="mode-btn" data-mode="business" onclick="setMode('business')">📊 業務</button>
+              <button class="mode-btn" data-mode="personal" onclick="setMode('personal')">👤 個人</button>
             </div>
           </div>
+          
+          <!-- 輸入框 -->
+          <div class="input-wrapper flex items-end gap-2 p-2">
+            <textarea id="input" rows="1" class="flex-1 px-3 py-2 bg-transparent border-none outline-none resize-none text-sand-800 dark:text-sand-100 text-sm" placeholder="輸入問題..." onkeydown="handleKey(event)"></textarea>
+            <button onclick="sendMessage()" class="p-2 rounded-lg bg-gradient-to-br from-claude-500 to-claude-600 text-white hover:shadow-lg transition">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"></path>
+              </svg>
+            </button>
+          </div>
+          
+          <p id="mode-hint" class="text-xs text-center text-sand-400">🧠 智慧模式：AI 會自動判斷資料來源</p>
         </div>
-        <div id="chat-box"
-             class="flex-1 overflow-y-auto p-4 space-y-4 bg-gray-50 dark:bg-gray-900">
+      </div>
+    </main>
+  </div>
+
+  <!-- ========== 知識庫頁面 ========== -->
+  <div id="kb-page" class="hidden fixed inset-0 z-50 bg-sand-50 dark:bg-sand-900 overflow-auto">
+    <div class="max-w-4xl mx-auto p-4 sm:p-6">
+      <div class="flex items-center justify-between mb-6">
+        <h2 class="text-xl font-bold text-sand-800 dark:text-sand-100">📚 知識庫管理</h2>
+        <button onclick="closeKnowledgeBase()" class="btn-ghost">✕ 關閉</button>
+      </div>
+      
+      <!-- 個人知識庫區塊 -->
+      <div class="kb-card mb-6 border-2 border-blue-200 dark:border-blue-800">
+        <div class="flex items-center justify-between mb-3">
+          <h3 class="font-semibold text-blue-700 dark:text-blue-300">📝 我的知識庫</h3>
+          <div class="flex gap-2">
+            <button onclick="showNoteEditor()" class="btn-ghost text-sm border border-blue-300 dark:border-blue-600 text-blue-600">✏️ 手寫筆記</button>
+            <label class="btn-primary text-sm bg-blue-600 hover:bg-blue-700 cursor-pointer">
+              📄 上傳文件
+              <input type="file" id="personal-file-upload" multiple accept=".pdf,.docx,.doc,.xlsx,.xls,.csv,.md,.txt,.rtf,.png,.jpg,.jpeg,.gif" class="hidden" onchange="handlePersonalFileUpload(event)">
+            </label>
+          </div>
         </div>
-        <div class="p-4 border-t dark:border-gray-700 flex items-center bg-white dark:bg-gray-800">
-          <input id="input"
-                 class="flex-1 border rounded p-2 bg-gray-100 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
-                 placeholder="輸入問題..." type="text" />
-          <button onclick="sendMessage()"
-                  class="ml-2 bg-blue-500 dark:bg-blue-700 text-white px-4 py-2 rounded hover:bg-blue-600 dark:hover:bg-blue-800 transition">
-            送出
+        <p class="text-sm text-sand-500 mb-3">上傳文件或手寫筆記，AI 會自動索引。支援 PDF、Word、Excel、CSV、圖片等格式，可在「👤 個人模式」下查詢。</p>
+        
+        <!-- 個人文件上傳狀態 -->
+        <div id="personal-upload-status" class="mb-3 hidden"></div>
+        
+        <!-- 個人知識列表 -->
+        <div id="notes-list" class="space-y-2 max-h-64 overflow-y-auto">
+          <p class="text-sand-400 text-sm text-center py-4">載入中...</p>
+        </div>
+      </div>
+      
+      <!-- 業務日報上傳 (僅管理員可見) -->
+      <div id="admin-business-section" class="kb-card mb-6 border-2 border-purple-200 dark:border-purple-800 hidden">
+        <div class="flex items-center justify-between mb-3">
+          <h3 class="font-semibold text-purple-700 dark:text-purple-300">📊 業務日報更新</h3>
+          <span class="text-xs bg-purple-100 dark:bg-purple-900 text-purple-600 dark:text-purple-300 px-2 py-1 rounded-full">管理員專用</span>
+        </div>
+        <p class="text-sm text-sand-500 mb-3">上傳 Lotus Notes 匯出的業務日報 TXT，系統會自動過濾舊資料並更新。</p>
+        
+        <div class="flex flex-wrap gap-3 items-end">
+          <div class="flex-1 min-w-[200px]">
+            <input type="file" id="business-file" accept=".txt" class="hidden" onchange="handleBusinessFileSelect(event)">
+            <label for="business-file" class="block w-full p-3 border-2 border-dashed border-purple-300 dark:border-purple-600 rounded-lg text-center cursor-pointer hover:border-purple-500 transition">
+              <span id="business-file-name" class="text-sm text-sand-600 dark:text-sand-400">點擊選擇 TXT 檔案</span>
+            </label>
+          </div>
+          <div class="flex items-center gap-2">
+            <label class="text-sm text-sand-600 dark:text-sand-400">保留</label>
+            <select id="months-to-keep" class="form-input w-20 py-2 text-sm">
+              <option value="6">6 月</option>
+              <option value="12" selected>12 月</option>
+              <option value="18">18 月</option>
+              <option value="24">24 月</option>
+            </select>
+          </div>
+          <button id="upload-business-btn" onclick="uploadBusinessReport()" disabled class="btn-primary bg-purple-600 hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed">
+            🚀 處理並更新
           </button>
         </div>
+        <div id="business-upload-status" class="mt-3 text-sm hidden"></div>
+      </div>
+      
+      <!-- 公用知識庫上傳 (僅管理員可見) -->
+      <div id="admin-upload-section" class="kb-card mb-6 hidden">
+        <h3 class="font-semibold text-sand-800 dark:text-sand-100 mb-3">📤 上傳公用文件 <span class="text-xs font-normal text-sand-400">管理員專用</span></h3>
+        <div id="drop-zone" class="border-2 border-dashed border-sand-300 dark:border-sand-600 rounded-xl p-6 text-center transition-all hover:border-claude-400 cursor-pointer">
+          <input type="file" id="file-upload" multiple accept=".pdf,.md,.txt,.docx,.doc,.xlsx,.xls,.csv,.rtf" class="hidden" onchange="handleFileSelect(event)">
+          <label for="file-upload" class="cursor-pointer block">
+            <svg class="w-10 h-10 mx-auto text-sand-400 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path>
+            </svg>
+            <p class="text-sand-600 dark:text-sand-400 text-sm">點擊或拖放文件</p>
+            <p class="text-sand-400 text-xs mt-1">支援 PDF, Word, Excel, CSV（自動轉 Markdown）</p>
+          </label>
+        </div>
+        <div id="upload-list" class="mt-3 space-y-2"></div>
+        <button id="upload-btn" onclick="uploadFiles()" class="hidden btn-primary mt-3 w-full">📤 開始上傳</button>
+      </div>
+      
+      <!-- 文件列表 -->
+      <div class="kb-card mb-6">
+        <div class="flex items-center justify-between mb-3">
+          <h3 class="font-semibold text-sand-800 dark:text-sand-100">📁 公用知識庫</h3>
+          <div class="flex items-center gap-2">
+            <div class="flex bg-sand-100 dark:bg-sand-700 rounded-lg p-1">
+              <button class="doc-type-btn active text-xs px-3 py-1 rounded-md transition" data-type="technical" onclick="setDocType('technical')">🔧 技術</button>
+              <button class="doc-type-btn text-xs px-3 py-1 rounded-md transition" data-type="business" onclick="setDocType('business')">📊 業務</button>
+            </div>
+            <button onclick="refreshFileList()" class="btn-ghost text-sm">🔄</button>
+          </div>
+        </div>
+        <div id="file-list" class="space-y-2 max-h-64 overflow-y-auto">
+          <p class="text-sand-500 text-sm">載入中...</p>
+        </div>
+      </div>
+      
+      <!-- 系統狀態 -->
+      <div class="kb-card">
+        <div class="flex items-center justify-between mb-3">
+          <h3 class="font-semibold text-sand-800 dark:text-sand-100">📊 系統狀態</h3>
+          <button id="reload-btn" onclick="reloadIndex()" class="btn-ghost text-sm hidden">🔄 重建索引</button>
+        </div>
+        <div id="system-status" class="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm">
+          <div class="text-center p-3 bg-sand-100 dark:bg-sand-700 rounded-lg">
+            <div class="text-2xl font-bold text-claude-600" id="stat-docs">--</div>
+            <div class="text-sand-500 text-xs">技術文件</div>
+          </div>
+          <div class="text-center p-3 bg-sand-100 dark:bg-sand-700 rounded-lg">
+            <div class="text-2xl font-bold text-purple-600" id="stat-biz">--</div>
+            <div class="text-sand-500 text-xs">業務記錄</div>
+          </div>
+          <div class="text-center p-3 bg-sand-100 dark:bg-sand-700 rounded-lg">
+            <div class="text-2xl font-bold text-blue-600" id="stat-notes">--</div>
+            <div class="text-sand-500 text-xs">我的筆記</div>
+          </div>
+          <div class="text-center p-3 bg-sand-100 dark:bg-sand-700 rounded-lg">
+            <div class="text-2xl font-bold text-green-600" id="stat-chunks">--</div>
+            <div class="text-sand-500 text-xs">索引區塊</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  
+  <!-- ===== 筆記編輯器 Modal ===== -->
+  <div id="note-editor-modal" class="hidden fixed inset-0 z-[60] modal-overlay flex items-center justify-center p-4">
+    <div class="modal-content w-full max-w-2xl max-h-[90vh] overflow-hidden flex flex-col">
+      <div class="flex items-center justify-between p-4 border-b border-sand-200 dark:border-sand-700">
+        <h3 id="note-editor-title" class="font-semibold text-sand-800 dark:text-sand-100">新增筆記</h3>
+        <button onclick="closeNoteEditor()" class="btn-ghost p-1">✕</button>
+      </div>
+      <div class="p-4 space-y-4 overflow-y-auto flex-1">
+        <div>
+          <label class="block text-sm font-medium text-sand-700 dark:text-sand-300 mb-1">標題 *</label>
+          <input type="text" id="note-title" class="form-input w-full" placeholder="例如：客戶 A 的特殊需求">
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-sand-700 dark:text-sand-300 mb-1">內容 * <span class="font-normal text-sand-400">(支援 Markdown)</span></label>
+          <textarea id="note-content" rows="10" class="form-input w-full font-mono text-sm" placeholder="在這裡輸入您的專業知識、工作心得、解決方案...
+
+支援 Markdown 格式：
+- **粗體** 
+- 清單項目
+- `程式碼`"></textarea>
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-sand-700 dark:text-sand-300 mb-1">標籤 <span class="font-normal text-sand-400">(逗號分隔，方便分類)</span></label>
+          <input type="text" id="note-tags" class="form-input w-full" placeholder="例如：客戶, 墊片, 重要">
+        </div>
+      </div>
+      <div class="flex justify-end gap-2 p-4 border-t border-sand-200 dark:border-sand-700">
+        <button onclick="closeNoteEditor()" class="btn-ghost">取消</button>
+        <button id="save-note-btn" onclick="saveNote()" class="btn-primary">💾 儲存筆記</button>
       </div>
     </div>
   </div>
 
   <!-- ========== 帳號管理頁面 ========== -->
-  <div id="admin-page" class="hidden p-3 sm:p-6 bg-gray-50 dark:bg-gray-900">
-    <div class="flex justify-between items-center mb-4">
-      <h2 class="text-xl font-bold dark:text-white">帳號管理</h2>
-      <div class="space-x-2">
-        <button id="create-user-btn"
-                class="hidden text-sm text-green-600 dark:text-green-400 border border-green-600 dark:border-green-400 px-2 py-1 rounded hover:bg-green-50 dark:hover:bg-gray-700"
-                onclick="openCreateModal()">
-          ➕ 新增使用者
-        </button>
-        <button class="text-sm text-gray-500 dark:text-gray-300"
-                onclick="closeAdmin()">
-          關閉
-        </button>
-      </div>
-    </div>
-    <div class="overflow-x-auto mb-4">
-      <table class="min-w-full table-auto border dark:border-gray-700">
-        <thead>
-          <tr class="bg-gray-200 dark:bg-gray-800">
-            <th class="border px-2 py-1 dark:border-gray-600 dark:text-white text-left min-w-[4rem]">帳號</th>
-            <th class="border px-2 py-1 dark:border-gray-600 dark:text-white text-left min-w-[5.5rem]">姓名</th>
-            <th class="border px-2 py-1 dark:border-gray-600 dark:text-white text-left min-w-[5.5rem]">部門</th>
-            <th class="border px-2 py-1 dark:border-gray-600 dark:text-white text-left min-w-[3.5rem]">角色</th>
-            <th class="border px-2 py-1 dark:border-gray-600 dark:text-white text-left min-w-[7rem]">操作功能</th>
-          </tr>
-        </thead>
-        <tbody id="user-table" class="bg-white dark:bg-gray-800">
-        </tbody>
-      </table>
-    </div>
-    <div id="pagination" class="flex justify-center items-center gap-4"></div>
-<!-- 新增使用者 Modal -->
-    <div id="create-modal"
-         class="hidden fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center z-50">
-      <div class="bg-white dark:bg-gray-800 p-6 rounded shadow w-96 space-y-3">
-        <h2 class="text-lg font-bold dark:text-white">新增使用者</h2>
-        <input id="modal-acc"
-               placeholder="帳號"
-               class="w-full border p-2 rounded bg-gray-50 dark:bg-gray-700 dark:border-gray-600 dark:text-white" />
-        <input id="modal-pw1"
-               placeholder="密碼"
-               type="password"
-               class="w-full border p-2 rounded bg-gray-50 dark:bg-gray-700 dark:border-gray-600 dark:text-white" />
-        <input id="modal-pw2"
-               placeholder="再次輸入密碼"
-               type="password"
-               class="w-full border p-2 rounded bg-gray-50 dark:bg-gray-700 dark:border-gray-600 dark:text-white" />
-        <input id="modal-name"
-               placeholder="姓名"
-               class="w-full border p-2 rounded bg-gray-50 dark:bg-gray-700 dark:border-gray-600 dark:text-white" />
-        <select id="modal-dept" class="w-full border p-2 rounded bg-gray-50 dark:bg-gray-700 dark:border-gray-600 dark:text-white max-h-60 overflow-auto">
-          <option value="" disabled selected>選擇部門</option>
-          <option value="董事長室">董事長室</option>
-          <option value="總經理室">總經理室</option>
-          <option value="管理部">管理部</option>
-          <option value="貿易課">貿易課</option>
-          <option value="採購">採購</option>
-          <option value="空壓產品群">空壓產品群</option>
-          <option value="油壓產品群">油壓產品群</option>
-          <option value="止洩產品群">止洩產品群</option>
-          <option value="台北營業所">台北營業所</option>
-          <option value="台中營業所">台中營業所</option>
-          <option value="台南營業所">台南營業所</option>
-          <option value="高雄營業所">高雄營業所</option>
-          <option value="湖內廠">湖內廠</option>
-          <option value="湖內廠製造課">湖內廠製造課</option>
-          <option value="湖內廠業務課">湖內廠業務課</option>
-          <option value="儲運所">儲運所</option>
-        </select>
-        <select id="modal-role"
-                class="w-full border p-2 rounded bg-gray-50 dark:bg-gray-700 dark:border-gray-600 dark:text-white">
-          <option value="user">user</option>
-          <option value="admin">admin</option>
-        </select>
-        <div class="flex justify-end space-x-2 pt-2">
-		  <button class="px-4 py-1 rounded bg-green-600 dark:bg-green-800 text-white hover:bg-green-700 dark:hover:bg-green-900"
-                  onclick="submitCreateUser()">新增</button>
-          <button class="px-4 py-1 rounded bg-gray-300 dark:bg-gray-600 dark:text-white hover:bg-gray-400 dark:hover:bg-gray-500"
-                  onclick="closeCreateModal()">取消</button>
+  <div id="admin-page" class="hidden fixed inset-0 z-50 bg-sand-50 dark:bg-sand-900 overflow-auto">
+    <div class="max-w-4xl mx-auto p-4 sm:p-6">
+      <div class="flex items-center justify-between mb-6">
+        <h2 class="text-xl font-bold text-sand-800 dark:text-sand-100">👥 帳號管理</h2>
+        <div class="flex gap-2">
+          <button id="create-user-btn" onclick="openCreateModal()" class="hidden btn-primary text-sm">➕ 新增</button>
+          <button onclick="closeAdmin()" class="btn-ghost">✕ 關閉</button>
         </div>
       </div>
-    </div>
-
-    <!-- 編輯個人資料 Modal -->
-    <div id="edit-profile-modal"
-         class="hidden fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center z-50">
-      <div class="bg-white dark:bg-gray-800 p-6 rounded w-96 space-y-3">
-        <h2 class="font-bold text-lg dark:text-white">修改個人資料</h2>
-        <input id="edit-name"
-               placeholder="姓名"
-               class="w-full border p-2 rounded bg-gray-50 dark:bg-gray-700 dark:border-gray-600 dark:text-white" />
-        <select id="edit-dept" class="w-full border p-2 rounded bg-gray-50 dark:bg-gray-700 dark:border-gray-600 dark:text-white max-h-60 overflow-auto">
-          <option value="董事長室">董事長室</option>
-          <option value="總經理室">總經理室</option>
-          <option value="管理部">管理部</option>
-          <option value="貿易課">貿易課</option>
-          <option value="採購">採購</option>
-          <option value="空壓產品群">空壓產品群</option>
-          <option value="油壓產品群">油壓產品群</option>
-          <option value="止洩產品群">止洩產品群</option>
-          <option value="台北營業所">台北營業所</option>
-          <option value="台中營業所">台中營業所</option>
-          <option value="台南營業所">台南營業所</option>
-          <option value="高雄營業所">高雄營業所</option>
-          <option value="湖內廠">湖內廠</option>
-          <option value="湖內廠製造課">湖內廠製造課</option>
-          <option value="湖內廠業務課">湖內廠業務課</option>
-          <option value="儲運所">儲運所</option>
-        </select>
-        <div class="flex justify-end space-x-2">
-          <button class="px-4 py-1 bg-blue-600 dark:bg-blue-800 text-white rounded hover:bg-blue-700 dark:hover:bg-blue-900"
-                  onclick="submitEditProfile()">儲存</button>
-          <button class="px-4 py-1 bg-gray-300 dark:bg-gray-600 dark:text-white rounded hover:bg-gray-400 dark:hover:bg-gray-500"
-                  onclick="closeProfileModal()">取消</button>
-        </div>
+      
+      <div class="modal-content overflow-hidden">
+        <table class="w-full">
+          <thead class="bg-sand-100 dark:bg-sand-700">
+            <tr>
+              <th class="px-4 py-3 text-left text-sm font-semibold text-sand-700 dark:text-sand-200">帳號</th>
+              <th class="px-4 py-3 text-left text-sm font-semibold text-sand-700 dark:text-sand-200">姓名</th>
+              <th class="px-4 py-3 text-left text-sm font-semibold text-sand-700 dark:text-sand-200">部門</th>
+              <th class="px-4 py-3 text-left text-sm font-semibold text-sand-700 dark:text-sand-200">角色</th>
+              <th class="px-4 py-3 text-left text-sm font-semibold text-sand-700 dark:text-sand-200">操作</th>
+            </tr>
+          </thead>
+          <tbody id="user-table" class="divide-y divide-sand-200 dark:divide-sand-700"></tbody>
+        </table>
       </div>
+      <div id="pagination" class="flex justify-center gap-2 mt-4"></div>
     </div>
   </div>
 
-  <!-- ========== 修改密碼 Modal ========== -->
-  <div id="password-modal"
-       class="hidden fixed inset-0 flex items-center justify-center bg-black bg-opacity-50 z-50">
-    <div class="bg-white dark:bg-gray-800 p-6 rounded shadow w-80 space-y-4">
-      <h2 class="text-lg font-bold dark:text-white">修改密碼</h2>
-      <input id="pw1"
-             class="w-full border p-2 rounded bg-gray-50 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
-             placeholder="新密碼"
-             type="password" />
-      <input id="pw2"
-             class="w-full border p-2 rounded bg-gray-50 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
-             placeholder="再次輸入密碼"
-             type="password" />
-      <div class="flex justify-end space-x-2">
-        <button onclick="submitPasswordChange()"
-                class="px-4 py-1 rounded bg-blue-500 dark:bg-blue-700 text-white hover:bg-blue-600 dark:hover:bg-blue-800 transition">
-          確認
-        </button>
-        <button onclick="closePasswordModal()" class="px-4 py-1 rounded bg-gray-300 dark:bg-gray-600 dark:text-white hover:bg-gray-400 dark:hover:bg-gray-500">
-          取消
-        </button>
-      </div>
-    </div>
-  </div>
-
-  <!-- ========== 修改使用者權限 Modal ========== -->
-  <div id="edit-role-modal"
-       class="hidden fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center z-50">
-    <div class="bg-white dark:bg-gray-800 p-6 rounded w-80 space-y-3">
-      <h2 class="font-bold text-lg dark:text-white">修改使用者權限</h2>
-      <select id="edit-role"
-              class="w-full border p-2 rounded bg-gray-50 dark:bg-gray-700 dark:border-gray-600 dark:text-white">
+  <!-- ========== Modals ========== -->
+  
+  <!-- 新增使用者 -->
+  <div id="create-modal" class="hidden fixed inset-0 z-50 modal-overlay flex items-center justify-center p-4">
+    <div class="modal-content w-full max-w-sm p-6 space-y-4">
+      <h3 class="text-lg font-bold text-sand-800 dark:text-sand-100">新增使用者</h3>
+      <input id="modal-acc" class="form-input" placeholder="帳號">
+      <input id="modal-pw1" type="password" class="form-input" placeholder="密碼">
+      <input id="modal-pw2" type="password" class="form-input" placeholder="確認密碼">
+      <input id="modal-name" class="form-input" placeholder="姓名">
+      <select id="modal-dept" class="form-input">
+        <option value="">選擇部門</option>
+        <option>董事長室</option><option>總經理室</option><option>管理部</option>
+        <option>貿易課</option><option>採購</option><option>空壓產品群</option>
+        <option>油壓產品群</option><option>止洩產品群</option><option>台北營業所</option>
+        <option>台中營業所</option><option>台南營業所</option><option>高雄營業所</option>
+        <option>湖內廠</option><option>湖內廠製造課</option><option>湖內廠業務課</option><option>儲運所</option>
+      </select>
+      <select id="modal-role" class="form-input">
         <option value="user">user</option>
         <option value="admin">admin</option>
       </select>
-      <div class="flex justify-end space-x-2">
-        <button class="px-4 py-1 bg-green-600 dark:bg-green-800 text-white rounded hover:bg-green-700 dark:hover:bg-green-900"
-                onclick="submitEditRole()">儲存</button>
-        <button class="px-4 py-1 bg-gray-300 dark:bg-gray-600 dark:text-white rounded hover:bg-gray-400 dark:hover:bg-gray-500"
-                onclick="closeRoleModal()">取消</button>
+      <div class="flex justify-end gap-2 pt-2">
+        <button onclick="closeCreateModal()" class="btn-ghost">取消</button>
+        <button onclick="submitCreateUser()" class="btn-primary">新增</button>
+      </div>
+    </div>
+  </div>
+  
+  <!-- 修改密碼 -->
+  <div id="password-modal" class="hidden fixed inset-0 z-50 modal-overlay flex items-center justify-center p-4">
+    <div class="modal-content w-full max-w-sm p-6 space-y-4">
+      <h3 class="text-lg font-bold text-sand-800 dark:text-sand-100">修改密碼</h3>
+      <input id="pw1" type="password" class="form-input" placeholder="新密碼">
+      <input id="pw2" type="password" class="form-input" placeholder="確認密碼">
+      <div class="flex justify-end gap-2 pt-2">
+        <button onclick="closePasswordModal()" class="btn-ghost">取消</button>
+        <button onclick="submitPasswordChange()" class="btn-primary">確認</button>
+      </div>
+    </div>
+  </div>
+  
+  <!-- 修改個人資料 -->
+  <div id="edit-profile-modal" class="hidden fixed inset-0 z-50 modal-overlay flex items-center justify-center p-4">
+    <div class="modal-content w-full max-w-sm p-6 space-y-4">
+      <h3 class="text-lg font-bold text-sand-800 dark:text-sand-100">修改個人資料</h3>
+      <input id="edit-name" class="form-input" placeholder="姓名">
+      <select id="edit-dept" class="form-input">
+        <option>董事長室</option><option>總經理室</option><option>管理部</option>
+        <option>貿易課</option><option>採購</option><option>空壓產品群</option>
+        <option>油壓產品群</option><option>止洩產品群</option><option>台北營業所</option>
+        <option>台中營業所</option><option>台南營業所</option><option>高雄營業所</option>
+        <option>湖內廠</option><option>湖內廠製造課</option><option>湖內廠業務課</option><option>儲運所</option>
+      </select>
+      <div class="flex justify-end gap-2 pt-2">
+        <button onclick="closeProfileModal()" class="btn-ghost">取消</button>
+        <button onclick="submitEditProfile()" class="btn-primary">儲存</button>
+      </div>
+    </div>
+  </div>
+  
+  <!-- 修改權限 -->
+  <div id="edit-role-modal" class="hidden fixed inset-0 z-50 modal-overlay flex items-center justify-center p-4">
+    <div class="modal-content w-full max-w-sm p-6 space-y-4">
+      <h3 class="text-lg font-bold text-sand-800 dark:text-sand-100">修改權限</h3>
+      <select id="edit-role" class="form-input">
+        <option value="user">user</option>
+        <option value="admin">admin</option>
+      </select>
+      <div class="flex justify-end gap-2 pt-2">
+        <button onclick="closeRoleModal()" class="btn-ghost">取消</button>
+        <button onclick="submitEditRole()" class="btn-primary">儲存</button>
       </div>
     </div>
   </div>
 
-  <script src="script.js"></script>
-  <script>
-    // 移動端input自動bring into view
-    document.querySelectorAll('input').forEach(input => {
-      input.addEventListener('focus', () => {
-        setTimeout(() => {
-          input.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        }, 200);
-      });
-    });
-    // 側邊欄 drawer 功能
-    function toggleSidebar() {
-      const sidebar = document.getElementById("sidebar");
-      const backdrop = document.getElementById("sidebar-backdrop");
-      if (sidebar.classList.contains("-translate-x-full")) {
-        sidebar.classList.remove("-translate-x-full");
-        backdrop.classList.remove("hidden");
-      } else {
-        sidebar.classList.add("-translate-x-full");
-        backdrop.classList.add("hidden");
-      }
-    }
-    function closeSidebar() {
-      const sidebar = document.getElementById("sidebar");
-      const backdrop = document.getElementById("sidebar-backdrop");
-      sidebar.classList.add("-translate-x-full");
-      backdrop.classList.add("hidden");
-    }
-    window.addEventListener("resize", () => {
-      if (window.innerWidth >= 768) {
-        document.getElementById("sidebar").classList.remove("-translate-x-full");
-        document.getElementById("sidebar-backdrop").classList.add("hidden");
-      }
-    });
-  </script>
+  <script src="/frontend/script.js"></script>
 </body>
 </html>

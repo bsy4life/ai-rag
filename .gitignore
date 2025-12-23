@@ -1,35 +1,48 @@
-# 🛡️ 隱私 & 安全
-.env
-
-# 📦 Docker volumes or build cache
-db_data/
-certs/
-*.key
-*.crt
-
-
-# 🐍 Python cache
+# Python
 __pycache__/
 *.pyc
-
-# 🛠 IDE / 編輯器
-.vscode/
-.idea/
-
-# 🗑 系統自動產生
-.DS_Store
-Thumbs.db
-
-# 📄 日誌 & 執行記錄（視情況忽略）
-*.logbackend/data/
-
-# 忽略 Chroma 向量資料庫
-backend/data/chroma_db_openai/
-# 建議加入
-*.bin
-*.pkl
-*.parquet
-*.db
+*.pyo
+*.pyd
 *.log
-FETCH_HEAD
-master
+*.tmp
+
+# Virtualenv
+venv/
+.venv/
+env/
+
+# OS / Editor
+.DS_Store
+.idea/
+.vscode/
+
+# Local configs / secrets
+*.env
+.env.*
+users.txt
+*secret*
+*token*
+*password*
+
+# Vector DB / Chroma / FAISS / caches
+data/chroma_db*/
+data/vectordb*/
+vectorstore/
+*.sqlite3
+*.pickle
+*.pkl
+*.faiss
+last_hash.txt
+
+# Data folders (keep a placeholder with .gitkeep if needed)
+data/business/
+data/markdown/
+data/pdfs/
+data/personal_kb/
+data/clear/
+
+# Backups / zips
+*.zip
+*.bak
+*backup*
+EOF

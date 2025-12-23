@@ -1,37 +1,30 @@
-FROM tiangolo/uvicorn-gunicorn-fastapi:python3.9
-
-# 建議加語言
-ENV LANG C.UTF-8
+FROM python:3.11-slim
 
 WORKDIR /app
 
-# 安裝系統套件（合併 && 一次清理，減少 image 層與大小）
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
+# 安裝系統依賴 + Tesseract OCR + PDF/DOCX 轉換工具
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    libpq-dev \
     libmagic1 \
-    libgl1 \
-    libglib2.0-0 \
-    libsm6 \
-    libxrender1 \
-    libxext6 \
-    poppler-utils \
     tesseract-ocr \
+    tesseract-ocr-chi-tra \
+    tesseract-ocr-chi-sim \
+    tesseract-ocr-eng \
+    poppler-utils \
+    pandoc \
     && rm -rf /var/lib/apt/lists/*
 
-# 先複製 requirements.txt，這樣未來只有 requirements.txt 變才會重新 pip install
+# 複製 requirements 並安裝
 COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
-# 安裝 Python 套件（建議升級 pip，有些新版 whl 較快且體積小）
-RUN pip install --upgrade pip && \
-    pip install -r requirements.txt
-
-# 再複製 app 其餘檔案
+# 複製應用程式
 COPY . .
 
-# <--- 使用 Ollama Llama3免費本地模型=1  使用OpenAI=0 --->
-ENV USE_FREE_MODEL=0
-# 禁用 huggingface tokenizers 警告
-ENV TOKENIZERS_PARALLELISM=false
+# 建立必要目錄
+RUN mkdir -p /app/data/personal_kb /app/temp /app/cache
 
-# 執行 uvicorn 伺服器
+EXPOSE 8000
+
 CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -1,355 +1,982 @@
+# app.py - FastAPI 應用 + 修復後的 QA 系統 + 靜態文件服務
 import os
-import time
-from datetime import datetime, timedelta
-from contextlib import asynccontextmanager
-from typing import ClassVar, Optional, List
-from fastapi import FastAPI, Depends, Request, HTTPException, status
-from fastapi.responses import FileResponse
+import re
+import warnings
+import logging
+
+# ─────────────────────────────────────────────────────────────
+# 🔇 關閉雜訊：必須在導入其他模組之前設定
+# ─────────────────────────────────────────────────────────────
+os.environ["ANONYMIZED_TELEMETRY"] = "False"
+os.environ["CHROMA_TELEMETRY"] = "False"
+os.environ["POSTHOG_DISABLED"] = "true"
+
+# 過濾警告
+warnings.filterwarnings("ignore", category=DeprecationWarning, module="langchain")
+warnings.filterwarnings("ignore", message=".*get_relevant_documents.*")
+
+# 設定 logging - 必須在導入 chromadb 之前
+logging.getLogger("chromadb").setLevel(logging.WARNING)
+logging.getLogger("chromadb.telemetry").setLevel(logging.CRITICAL)
+logging.getLogger("chromadb.telemetry.product.posthog").setLevel(logging.CRITICAL)
+logging.getLogger("chromadb.telemetry.product.posthog").disabled = True
+logging.getLogger("httpx").setLevel(logging.WARNING)
+
+from typing import Optional, Tuple, Dict, Any
+from fastapi import FastAPI, HTTPException, Request, File, UploadFile, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from pydantic import BaseModel
+
+# ==== CSV 直查總開關（預設關閉）====
+USE_CSV_DIRECT = os.getenv("BIZ_CSV_DIRECT", "0").lower() in ("1","true","yes")
+if USE_CSV_DIRECT:
+    from business_csv import query_business_df, paginate_business_table  # 可回退／緊急救援時使用
+    # 分頁狀態（僅 CSV 模式用）
+    business_query_state: Dict[str, Dict[str, Any]] = {}
+else:
+    # 預設走 GPT-RAG，不用 CSV 分頁
+    business_query_state: Dict[str, Dict[str, Any]] = {}
+
+
+# 導入修復後的核心模組
+from core import get_qa_system, reload_qa_system
+from utils import cost_estimator
+
+# 導入數據庫和認證相關模組
+from models import Base, User, ChatLog
+from auth import verify_password, get_password_hash
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-from pydantic import BaseModel
-from jose import JWTError
-from watcher import start_watchdog
-from models import Base, User, ChatLog
-from auth import create_access_token, decode_token, verify_password, get_password_hash
-from core import build_qa, reload_qa_chain, chat_memories, qa_chain
-from core import ensure_chinese
+# CSV direct import moved under USE_CSV_DIRECT
+# 導入用戶管理和認證相關模組
+from jose import jwt
+from datetime import datetime, timedelta
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi import Depends, status
+from sqlalchemy import text
 
+_last_query_df = None
+_last_offset = 0
 
-DATABASE_URL = os.getenv("DATABASE_URL")
+# 設置日誌 - 只設定一次，避免重複
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+logger = logging.getLogger(__name__)
+
+# 降低第三方庫的日誌級別
+for noisy_logger in ["uvicorn.access", "uvicorn.error", "httpcore", "httpx"]:
+    logging.getLogger(noisy_logger).setLevel(logging.WARNING)
+# 全域變數，記錄每個 chat_id 的查詢狀態
+business_query_state = {}  # {chat_id: {"last_query": str, "offset": int}}
+# 修復：正確構建 DATABASE_URL
+def get_database_url():
+    # 優先使用完整的 DATABASE_URL
+    database_url = os.getenv("DATABASE_URL")
+    if database_url and not "${" in database_url:
+        return database_url
+    
+    # 否則從個別環境變數構建
+    pg_host = os.getenv("PG_HOST", "localhost")
+    pg_port = os.getenv("PG_PORT", "5432")
+    pg_user = os.getenv("PG_USER", "ai_user")
+    pg_password = os.getenv("PG_PASSWORD", "")
+    pg_database = os.getenv("PG_NAME", "ai_db")  # 修改為 PG_NAME
+    
+    # 確保 port 是數字
+    try:
+        int(pg_port)
+    except ValueError:
+        print(f"警告：PG_PORT 值無效：{pg_port}，使用默認值 5432")
+        pg_port = "5432"
+    
+    constructed_url = f"postgresql://{pg_user}:{pg_password}@{pg_host}:{pg_port}/{pg_database}"
+    print(f"構建的 DATABASE_URL: postgresql://{pg_user}:***@{pg_host}:{pg_port}/{pg_database}")
+    return constructed_url
+
+DATABASE_URL = get_database_url()
 if not DATABASE_URL:
-    raise ValueError("❌ 請先設定 DATABASE_URL")
-engine = create_engine(DATABASE_URL)
+    raise ValueError("⛔ 無法獲取有效的 DATABASE_URL")
+
+engine = create_engine(DATABASE_URL, echo=False)
 SessionLocal = sessionmaker(bind=engine)
-Base.metadata.create_all(bind=engine)
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR = os.path.join(BASE_DIR, "data/clear")
-FRONTEND_DIR = os.path.join(BASE_DIR, "frontend")
+# 確保數據庫表存在
+try:
+    Base.metadata.create_all(bind=engine)
+    print("✅ 數據庫表初始化完成")
+except Exception as e:
+    print(f"⚠️ 數據庫表初始化失敗：{e}")
+    
+    # 檢查是否是數據庫不存在的問題
+    if "does not exist" in str(e):
+        print("🔧 嘗試創建數據庫...")
+        try:
+            # 連接到 postgres 默認數據庫來創建新數據庫
+            pg_host = os.getenv("PG_HOST", "localhost")
+            pg_port = os.getenv("PG_PORT", "5432")
+            pg_user = os.getenv("PG_USER", "ai_user")
+            pg_password = os.getenv("PG_PASSWORD", "")
+            pg_database = os.getenv("PG_NAME", "ai_db")  # 修改為 PG_NAME
+            
+            # 連接到默認 postgres 數據庫
+            admin_url = f"postgresql://{pg_user}:{pg_password}@{pg_host}:{pg_port}/postgres"
+            admin_engine = create_engine(admin_url, isolation_level='AUTOCOMMIT')
+            
+            with admin_engine.connect() as conn:
+                # 檢查數據庫是否已存在
+                result = conn.execute(text(f"SELECT 1 FROM pg_database WHERE datname = '{pg_database}'"))
+                if not result.fetchone():
+                    # 創建數據庫
+                    conn.execute(text(f'CREATE DATABASE "{pg_database}"'))
+                    print(f"✅ 數據庫 {pg_database} 創建成功")
+                else:
+                    print(f"ℹ️ 數據庫 {pg_database} 已存在")
+            
+            # 重新連接並創建表
+            Base.metadata.create_all(bind=engine)
+            print("✅ 數據庫表創建成功")
+            
+        except Exception as db_create_error:
+            print(f"❌ 創建數據庫失敗：{db_create_error}")
+            raise
+    else:
+        # 嘗試基本連接測試
+        try:
+            with engine.connect() as conn:
+                result = conn.execute(text("SELECT 1")).fetchone()
+                print("✅ 數據庫連接測試成功")
+        except Exception as db_error:
+            print(f"❌ 數據庫連接失敗：{db_error}")
+            raise
 
-print(f"🛠️ Watchdog 監聽目錄：{DATA_DIR}", flush=True)
-if not os.path.exists(DATA_DIR):
-    print(f"❌ 目錄不存在：{DATA_DIR}", flush=True)
+# JWT 和認證設定
+SECRET_KEY = os.getenv("JWT_SECRET_KEY", "your-secret-key-change-in-production")
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 1440  # 24 hours
+
+security = HTTPBearer()
+
+# ─────────────────────────────────────────────────────────────
+# FastAPI 應用定義
+# ─────────────────────────────────────────────────────────────
+app = FastAPI(title="SanShin AI System", version="1.0.0")
+
+# CORS 設定
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# ─────────────────────────────────────────────────────────────
+# 知識庫管理 API
+# ─────────────────────────────────────────────────────────────
+try:
+    from knowledge_api import router as knowledge_router
+    app.include_router(knowledge_router)
+    logger.info("已載入知識庫管理 API v1")
+except ImportError as e:
+    logger.warning(f"知識庫管理 API v1 載入失敗: {e}")
+
+# 載入 v2 API（多層級知識庫）- 可用環境變數關閉
+# KB_V2_ENABLED=true/false（預設 true）
+KB_V2_ENABLED = os.getenv("KB_V2_ENABLED", "true").strip().lower() in ("1", "true", "yes", "y", "on")
+
+if KB_V2_ENABLED:
+    try:
+        from knowledge_api_v2 import router as kb_v2_router
+        app.include_router(kb_v2_router)
+        logger.info("已載入知識庫管理 API v2（多層級）")
+    except ImportError as e:
+        logger.warning(f"知識庫管理 API v2 載入失敗: {e}")
 else:
-    print(f"📁 監控資料夾存在，內含檔案：{os.listdir(DATA_DIR)}", flush=True)
+    logger.info("已關閉知識庫管理 API v2（KB_V2_ENABLED=false）")
 
-# ======== Pydantic Schemas ========
+# ─────────────────────────────────────────────────────────────
+# 靜態文件服務設定
+# ─────────────────────────────────────────────────────────────
+
+# 檢查前端目錄是否存在
+FRONTEND_DIR = "frontend"
+if os.path.exists(FRONTEND_DIR):
+    # 掛載靜態文件目錄
+    app.mount("/frontend", StaticFiles(directory=FRONTEND_DIR), name="frontend")
+    logger.info(f"已掛載前端靜態文件目錄: {FRONTEND_DIR}")
+else:
+    logger.warning(f"前端目錄不存在: {FRONTEND_DIR}")
+
+# ─────────────────────────────────────────────────────────────
+# 請求模型
+# ─────────────────────────────────────────────────────────────
+class QueryRequest(BaseModel):
+    query: str
+    mode: str = "smart"
+
+class QueryResponse(BaseModel):
+    answer: str
+    source_type: str
+    cost_info: Optional[Dict[str, Any]] = None
+
 class LoginRequest(BaseModel):
     account: str
     password: str
 
-class CreateUserRequest(BaseModel):
-    account: str
-    password: str
+class LoginResponse(BaseModel):
+    token: str
     name: str
-    role: str
-    department: str
+    message: str = "登入成功"
 
-class UpdateProfileRequest(BaseModel):
-    name: str
-    department: str
-
-class ResetPasswordRequest(BaseModel):
-    password: str
-
-class UpdateRoleRequest(BaseModel):
-    role: str
-
-class Question(BaseModel):
+class AskRequest(BaseModel):
     question: str
     chat_id: str
-    user: Optional[str] = None
-    qa_chain: ClassVar = None
+    user: str
+    mode: str = "smart"
 
-# ======== 啟動時：重建記憶鏈與 Watchdog ========
-from langchain.memory import ConversationBufferMemory
+class AskResponse(BaseModel):
+    answer: str
+    title: Optional[str] = None
+    sources: Optional[list] = None
+    source_type: Optional[str] = None
+    images: Optional[list] = None  # 🆕 個人知識庫圖片
+    used_provider: Optional[str] = None  # 🆕 本次使用的 LLM provider
+    used_model: Optional[str] = None  # 🆕 本次使用的模型
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    global qa_chain
-    qa_chain = build_qa()
-    if qa_chain is None:
-        print("⚠️ 初次建立知識庫時，build_qa() 回傳 None（資料夾可能空）。", flush=True)
-    # 載入舊對話紀錄（重建 chat_memories）
-    db = SessionLocal()
-    rows = db.query(ChatLog.chat_id).distinct().all()
-    for row in rows:
-        chat_id = row.chat_id
-        logs = (
-            db.query(ChatLog)
-            .filter(ChatLog.chat_id == chat_id)
-            .order_by(ChatLog.created_at)
-            .all()
-        )
-        memory = ConversationBufferMemory(memory_key="chat_history", return_messages=True)
-        for log in logs:
-            memory.chat_memory.add_user_message(log.question)
-            memory.chat_memory.add_ai_message(log.answer)
-        chat_memories[chat_id] = memory
-    db.close()
-    print("👀 [LIFESPAN] 準備啟動 watchdog ...", flush=True)
-    observer = start_watchdog()
-    print("👀 [LIFESPAN] start_watchdog() 已呼叫", flush=True)
-    yield
-    observer.stop()
-    observer.join()
+# ─────────────────────────────────────────────────────────────
+# 認證輔助函數
+# ─────────────────────────────────────────────────────────────
 
-app = FastAPI(lifespan=lifespan)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-app.mount("/frontend", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")
+def create_access_token(data: dict) -> str:
+    """創建 JWT Token"""
+    to_encode = data.copy()
+    expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    to_encode.update({"exp": expire})
+    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
-# ======== Auth 驗證 ========
-def get_current_user(request: Request) -> User:
-    auth = request.headers.get("Authorization", "")
-    if not auth.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Missing token")
+def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)) -> dict:
+    """驗證 JWT Token"""
     try:
-        data = decode_token(auth.replace("Bearer ", ""))
-        db = SessionLocal()
-        user = db.query(User).filter(User.account == data.sub).first()
-        db.close()
+        payload = jwt.decode(credentials.credentials, SECRET_KEY, algorithms=[ALGORITHM])
+        account = payload.get("sub")
+        if account is None:
+            raise HTTPException(status_code=401, detail="Invalid token")
+        return payload
+    except jwt.JWTError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+def get_current_user_from_db(token_data: dict = Depends(verify_token)) -> dict:
+    """從數據庫獲取當前用戶"""
+    account = token_data.get("sub")
+    if not account:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.account == account).first()
         if not user:
-            raise JWTError()
+            raise HTTPException(status_code=401, detail="User not found")
         return user
-    except JWTError:
-        raise HTTPException(status_code=401, detail="無效 Token")
-
-# ======== API ========
-
-@app.post("/login")
-def login(req: LoginRequest):
-    db = SessionLocal()
-    user = db.query(User).filter(User.account == req.account).first()
-    if not user or not verify_password(req.password, user.password):
+    finally:
         db.close()
-        raise HTTPException(status_code=401, detail="登入失敗")
-    token = create_access_token(
-        data={"sub": user.account, "name": user.name, "role": user.role},
-        expires_delta=timedelta(minutes=60)
-    )
-    db.close()
-    return {
-        "token": token,
-        "account": user.account,
-        "name": user.name
-    }
+# ─────────────────────────────────────────────────────────────
+# QA 系統適配器
+# ─────────────────────────────────────────────────────────────
 
-@app.post("/ask")
-def ask(q: Question, user: User = Depends(get_current_user)):
-    from langchain.memory import ConversationBufferMemory
-    global qa_chain
-    if q.chat_id not in chat_memories:
-        chat_memories[q.chat_id] = ConversationBufferMemory(memory_key="chat_history", return_messages=True)
-    chain = qa_chain.with_config({"memory": chat_memories[q.chat_id]})
+class CategorizedQASystem:
+    def __init__(self, core_qa_system):
+        self.core_qa = core_qa_system
+        backend = getattr(core_qa_system, "backend", {})
+        self.doc_count = backend.get("doc_count", 0)
+        self.file_count = backend.get("file_count", 0)
+        self.tech_vectordb = backend.get("retriever")
+        self.business_vectordb = backend.get("business_chain")
+
+    @staticmethod
+    def _extract_current_question(s: str) -> str:
+        m = re.search(r"當前問題[:：]\s*(.+)$", s, re.S)
+        return m.group(1).strip() if m else s.strip()
+
+    def ask(self, full_query: str, mode: str = "smart", user_id: str = "default"):
+        question = self._extract_current_question(full_query)
+        if not question.strip():
+            return "請輸入有效的問題。", "system", {}
+
+        answer, source_type, cost = self.core_qa.ask(question, mode, user_id)
+
+        # 🔄 Fallback（受 USE_CSV_DIRECT 控制）：若是業務查詢但回傳太空，才用 CSV 快查補上
+        if USE_CSV_DIRECT and (source_type == "business") and (not answer or len(answer.strip()) < 20):
+            csv_result = _direct_business_query_text(question)
+            if csv_result:
+                return csv_result, "business_csv", cost
+
+        return answer, source_type, cost
+
+# ─────────────────────────────────────────────────────────────
+# 全域 QA 系統實例管理
+# ─────────────────────────────────────────────────────────────
+_QA: Optional[CategorizedQASystem] = None
+_QA_INIT_LOCK = False  # 簡單的初始化鎖，避免重複初始化
+
+def _build_backend() -> CategorizedQASystem:
+    core_qa = get_qa_system()
+    if not core_qa:
+        raise RuntimeError("無法從 core 模組獲取 QA 系統")
+    return CategorizedQASystem(core_qa)
+
+def get_qa_system_for_api() -> Optional[CategorizedQASystem]:
+    global _QA, _QA_INIT_LOCK
     
-    t0 = time.time()
-    result = chain.invoke({"input": q.question})
-    print(f"[ask] chain.invoke 耗時 {time.time()-t0:.2f} 秒", flush=True)
+    if _QA is not None:
+        return _QA
     
-    answer = result["answer"]
-    sources = list({os.path.basename(d.metadata.get("source", "")) for d in result.get("context", [])})
-    title = q.question[:20]
+    # 避免重複初始化
+    if _QA_INIT_LOCK:
+        logger.debug("QA 系統正在初始化中，跳過...")
+        return None
+    
+    _QA_INIT_LOCK = True
+    try:
+        logger.info("🔧 初始化 QA 系統...")
+        _QA = _build_backend()
+        logger.info(f"✅ QA 系統初始化完成: {_QA.file_count} 文件, {_QA.doc_count} 塊")
+    except Exception as e:
+        logger.error(f"❌ 建立 QA 系統失敗：{e}")
+        _QA = None
+    finally:
+        _QA_INIT_LOCK = False
+    
+    return _QA
 
-    # === 這一行保證回應是中文 ===
-    t1 = time.time()
-    #answer = ensure_chinese(answer)
-    print(f"[ask] ensure_chinese 耗時 {time.time()-t1:.2f} 秒", flush=True)
-    # ===========================
+def reload_qa_system_for_api() -> bool:
+    global _QA
+    try:
+        core_success = reload_qa_system()
+        if core_success:
+            _QA = _build_backend()
+            return True
+        return False
+    except Exception as e:
+        logger.error(f"重建 QA 系統失敗：{e}")
+        return False
 
-    db = SessionLocal()
-    exists = db.query(ChatLog).filter_by(chat_id=q.chat_id).first()
-    db.add(ChatLog(
-        user_id=user.id,
-        chat_id=q.chat_id,
-        title=None if exists else title,
-        question=q.question,
-        answer=answer,
-        created_at=datetime.utcnow()
-    ))
-    db.commit()
-    db.close()
+# ─────────────────────────────────────────────────────────────
+# 前端路由
+# ─────────────────────────────────────────────────────────────
 
-    return {
-        "answer": answer,
-        "title": title,
-        "sources": sources,
-        "no_data": len(sources) == 0
-    }
+@app.get("/", response_class=HTMLResponse)
+async def serve_frontend():
+    """提供前端主頁面"""
+    index_path = os.path.join(FRONTEND_DIR, "index.html")
+    if os.path.exists(index_path):
+        return FileResponse(index_path)
+    else:
+        return HTMLResponse("""
+        <html>
+            <head><title>SanShin AI</title></head>
+            <body>
+                <h1>SanShin AI System</h1>
+                <p>前端文件未找到，但 API 服務正常運行</p>
+                <p>API 端點: <a href="/docs">/docs</a></p>
+            </body>
+        </html>
+        """)
 
-@app.get("/chat_ids/me")
-def chat_ids_me(user: User = Depends(get_current_user)):
-    db = SessionLocal()
-    logs = db.query(ChatLog).filter_by(user_id=user.id).order_by(ChatLog.created_at).all()
-    seen = set()
-    ids = []
-    for log in logs:
-        if log.chat_id not in seen:
-            ids.append({"chat_id": log.chat_id, "title": log.title or f"對話 {len(ids) + 1}"})
-            seen.add(log.chat_id)
-    db.close()
-    return ids
+@app.get("/sw.js")
+async def service_worker():
+    """提供 Service Worker 文件"""
+    sw_path = os.path.join(FRONTEND_DIR, "sw.js")
+    if os.path.exists(sw_path):
+        return FileResponse(sw_path, media_type='application/javascript')
+    else:
+        # 返回一個基本的 Service Worker
+        return Response("""
+        // 基本 Service Worker
+        self.addEventListener('install', function(event) {
+            console.log('Service Worker installed');
+        });
+        
+        self.addEventListener('activate', function(event) {
+            console.log('Service Worker activated');
+        });
+        """, media_type='application/javascript')
 
-@app.get("/chat_logs/{chat_id}")
-def get_chat_log(chat_id: str, user: User = Depends(get_current_user)):
-    db = SessionLocal()
-    logs = (
-        db.query(ChatLog)
-        .filter(ChatLog.chat_id == chat_id, ChatLog.user_id == user.id)
-        .order_by(ChatLog.created_at)
-        .all()
-    )
-    db.close()
-    return [
-        {
-            "id": log.id,
-            "question": log.question,
-            "answer": log.answer,
-            "created_at": log.created_at,
+@app.get("/manifest.json")
+async def manifest():
+    """提供 PWA manifest 文件"""
+    manifest_path = os.path.join(FRONTEND_DIR, "manifest.json")
+    if os.path.exists(manifest_path):
+        return FileResponse(manifest_path, media_type='application/json')
+    else:
+        # 返回基本的 manifest
+        return {
+            "name": "SanShin AI",
+            "short_name": "SanShin AI",
+            "start_url": "/",
+            "display": "standalone",
+            "background_color": "#ffffff",
+            "theme_color": "#2563eb",
+            "icons": [
+                {
+                    "src": "/frontend/icon/icon-192.png",
+                    "sizes": "192x192",
+                    "type": "image/png"
+                }
+            ]
         }
-        for log in logs
-    ]
 
-@app.put("/chat_logs/{chat_id}/title")
-def update_chat_title(chat_id: str, data: dict, user: User = Depends(get_current_user)):
-    db = SessionLocal()
-    logs = db.query(ChatLog).filter(ChatLog.chat_id == chat_id, ChatLog.user_id == user.id).all()
-    for log in logs:
-        log.title = data.get("title", "")
-    db.commit()
-    db.close()
-    return {"ok": True}
+# ─────────────────────────────────────────────────────────────
+# 認證與用戶管理路由
+# ─────────────────────────────────────────────────────────────
 
-@app.delete("/chat_logs/{chat_id}")
-def delete_chat_log(chat_id: str, user: User = Depends(get_current_user)):
+@app.post("/login", response_model=LoginResponse)
+async def login(request: LoginRequest):
+    """用戶登入"""
+    account = request.account.strip()
+    password = request.password.strip()
+    
+    if not account or not password:
+        raise HTTPException(status_code=400, detail="帳號和密碼不能為空")
+    
     db = SessionLocal()
-    logs = db.query(ChatLog).filter(ChatLog.chat_id == chat_id, ChatLog.user_id == user.id).all()
-    for log in logs:
-        db.delete(log)
-    db.commit()
-    db.close()
-    if chat_id in chat_memories:
-        del chat_memories[chat_id]
-    return {"ok": True}
+    try:
+        user = db.query(User).filter(User.account == account).first()
+        if not user or not verify_password(password, user.password):
+            raise HTTPException(status_code=401, detail="帳號或密碼錯誤")
+        
+        token = create_access_token({
+            "sub": account,
+            "name": user.name,
+            "role": user.role,
+            "department": user.department
+        })
+        
+        return LoginResponse(token=token, name=user.name)
+    finally:
+        db.close()
+
+@app.get("/users/me")
+async def get_current_user_info(current_user: User = Depends(get_current_user_from_db)):
+    """獲取當前用戶信息"""
+    return {
+        "account": current_user.account,
+        "name": current_user.name,
+        "department": current_user.department,
+        "role": current_user.role
+    }
 
 @app.get("/users")
-def list_users(user: User = Depends(get_current_user)):
-    if user.role != "admin":
-        raise HTTPException(status_code=403, detail="管理員專用")
+async def list_users(current_user: User = Depends(get_current_user_from_db)):
+    """列出所有用戶（僅管理員）"""
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="權限不足")
+    
     db = SessionLocal()
-    users = db.query(User).all()
-    db.close()
-    return [
-        {
-            "account": u.account,
-            "name": u.name,
-            "department": u.department,
-            "role": u.role
-        } for u in users
-    ]
+    try:
+        users = db.query(User).all()
+        return [
+            {
+                "account": user.account,
+                "name": user.name,
+                "department": user.department,
+                "role": user.role
+            }
+            for user in users
+        ]
+    finally:
+        db.close()
+# CSV direct import moved under USE_CSV_DIRECT
+# 紀錄分頁狀態
+business_query_state: Dict[str, Dict[str, Any]] = {}
 
-@app.get("/users/{account}")
-def get_user(account: str, user: User = Depends(get_current_user)):
+@app.post("/ask", response_model=AskResponse)
+async def ask_endpoint(request: AskRequest, current_user: User = Depends(get_current_user_from_db)):
+    global business_query_state
+
+    # 🟢 Step1: 分頁「繼續」（僅 CSV 直查模式）
+    if USE_CSV_DIRECT and request.question.strip() == "繼續":
+        state = business_query_state.get(request.chat_id)
+        if state:
+            df, offset = state["df"], state["offset"]
+            answer = paginate_business_table(df, offset=offset, page_size=50)
+            state["offset"] += 50
+            return AskResponse(
+                answer=answer,
+                title="繼續查詢",
+                source_type="business_csv",
+                sources=["business_csv"]
+            )
+        else:
+            return AskResponse(answer="⚠️ 沒有可繼續的查詢，請先輸入新問題。")
+
+    # 🟢 Step2: 嘗試業務查詢（僅 CSV 直查模式）
+    if USE_CSV_DIRECT:
+        df = query_business_df(request.question)
+    else:
+        df = None
+    if df is not None and len(df) > 0:
+        business_query_state[request.chat_id] = {
+            "df": df,
+            "offset": 50,
+        }
+        answer = paginate_business_table(df, offset=0, page_size=50)
+
+        # ⚠️ 仍然寫入 ChatLog（保持你的功能）
+        db: Session = SessionLocal()
+        try:
+            title = request.question[:20] + "..." if len(request.question) > 20 else request.question
+            exists = db.query(ChatLog).filter_by(chat_id=request.chat_id).first()
+            db.add(ChatLog(
+                user_id=current_user.id,
+                chat_id=request.chat_id,
+                title=None if exists else title,
+                question=request.question,
+                answer=answer,
+                created_at=datetime.utcnow()
+            ))
+            db.commit()
+        except Exception as e:
+            db.rollback()
+            logger.error(f"Business ask log error: {e}")
+        finally:
+            db.close()
+
+        return AskResponse(
+            answer=answer,
+            title=request.question,
+            source_type="business_csv",
+            sources=["business_csv"]
+        )
+
+    # 🟢 Step3: fallback → 原本 QA 流程（完全不動）
+    qa = get_qa_system_for_api()
+    if not qa:
+        raise HTTPException(status_code=503, detail="QA system not available")
+
+    db: Session = SessionLocal()
+    try:
+        answer, source_type, cost_info = qa.ask(request.question, request.mode, user_id=current_user.account)
+        title = request.question[:20] + "..." if len(request.question) > 20 else request.question
+
+        exists = db.query(ChatLog).filter_by(chat_id=request.chat_id).first()
+        db.add(ChatLog(
+            user_id=current_user.id,
+            chat_id=request.chat_id,
+            title=None if exists else title,
+            question=request.question,
+            answer=answer,
+            created_at=datetime.utcnow()
+        ))
+        db.commit()
+
+        # 🆕 提取圖片資訊（如果有的話）
+        images = cost_info.get("images", []) if isinstance(cost_info, dict) else []
+        sources = cost_info.get("sources", [source_type]) if isinstance(cost_info, dict) else [source_type]
+
+        return AskResponse(
+            answer=answer,
+            title=title,
+            source_type=source_type,
+            sources=sources if sources else None,
+            images=images if images else None,
+            used_provider=(cost_info or {}).get("used_provider"),
+            used_model=(cost_info or {}).get("used_model")
+        )
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Ask endpoint error: {e}")
+        raise HTTPException(status_code=500, detail="處理問題時發生錯誤")
+    finally:
+        db.close()
+
+# 聊天記錄相關路由（簡化版）
+@app.get("/chat_ids/me")
+async def get_user_chats(current_user: User = Depends(get_current_user_from_db)):
+    """獲取用戶聊天列表"""
+    # 使用現有的數據庫邏輯
     db = SessionLocal()
-    u = db.query(User).filter(User.account == account).first()
-    db.close()
-    if not u:
-        raise HTTPException(status_code=404, detail="查無此人")
-    if user.role != "admin" and u.account != user.account:
-        raise HTTPException(status_code=403, detail="非本人/管理員禁止查詢")
+    try:
+        from sqlalchemy import func
+        subq = (
+            db.query(
+                ChatLog.chat_id,
+                func.min(ChatLog.created_at).label('first_created_at')
+            )
+            .filter(ChatLog.user_id == current_user.id)
+            .group_by(ChatLog.chat_id)
+            .subquery()
+        )
+
+        logs = (
+            db.query(ChatLog)
+            .join(subq, ChatLog.chat_id == subq.c.chat_id)
+            .filter(ChatLog.created_at == subq.c.first_created_at)
+            .filter(ChatLog.user_id == current_user.id)
+            .order_by(ChatLog.created_at.desc())
+            .all()
+        )
+
+        return [
+            {"chat_id": log.chat_id, "title": log.title or "未命名對話"}
+            for log in logs
+        ]
+    finally:
+        db.close()
+
+@app.get("/chat_logs/{chat_id}")
+async def get_chat_logs(chat_id: str, current_user: User = Depends(get_current_user_from_db)):
+    """獲取聊天記錄"""
+    db = SessionLocal()
+    try:
+        logs = db.query(ChatLog).filter_by(user_id=current_user.id, chat_id=chat_id).order_by(ChatLog.created_at).all()
+        return [
+            {
+                "question": log.question,
+                "answer": log.answer,
+                "created_at": log.created_at.strftime("%Y-%m-%d %H:%M")
+            } for log in logs
+        ]
+    finally:
+        db.close()
+
+@app.put("/chat_logs/{chat_id}/title")
+async def update_chat_title(chat_id: str, title_data: dict, current_user: User = Depends(get_current_user_from_db)):
+    """更新聊天標題"""
+    new_title = title_data.get("title", "").strip()
+    if not new_title:
+        raise HTTPException(status_code=400, detail="標題不能為空")
+    
+    db = SessionLocal()
+    try:
+        logs = db.query(ChatLog).filter(ChatLog.user_id == current_user.id, ChatLog.chat_id == chat_id).all()
+        if not logs:
+            raise HTTPException(status_code=404, detail="找不到該對話")
+        
+        for log in logs:
+            log.title = new_title
+        db.commit()
+        return {"message": "標題更新成功"}
+    finally:
+        db.close()
+
+@app.delete("/chat_logs/{chat_id}")
+async def delete_chat(chat_id: str, current_user: User = Depends(get_current_user_from_db)):
+    """刪除聊天"""
+    db = SessionLocal()
+    try:
+        deleted_count = db.query(ChatLog).filter(
+            ChatLog.user_id == current_user.id, 
+            ChatLog.chat_id == chat_id
+        ).delete()
+
+        # 同時清除記憶體中的對話記錄
+        if chat_id in chat_memories:
+            del chat_memories[chat_id]
+
+        db.commit()
+
+        if deleted_count == 0:
+            raise HTTPException(status_code=404, detail="找不到該對話")
+
+        return {"message": f"已刪除 {deleted_count} 條聊天記錄"}
+    finally:
+        db.close()
+
+# ─────────────────────────────────────────────────────────────
+# API 路由
+# ─────────────────────────────────────────────────────────────
+
+@app.get("/api")
+async def api_root():
+    return {"message": "SanShin AI API is running", "version": "1.0.0"}
+
+@app.get("/health")
+async def health_check():
+    qa = get_qa_system_for_api()
     return {
-        "account": u.account,
-        "name": u.name,
-        "department": u.department,
-        "role": u.role
+        "status": "healthy" if qa else "unhealthy", 
+        "qa_system_loaded": qa is not None,
+        "frontend_available": os.path.exists(FRONTEND_DIR)
     }
 
-@app.post("/users")
-def create_user(data: CreateUserRequest, user: User = Depends(get_current_user)):
-    if user.role != "admin":
-        raise HTTPException(status_code=403, detail="管理員限定")
-    db = SessionLocal()
-    exists = db.query(User).filter_by(account=data.account).first()
-    if exists:
-        db.close()
-        raise HTTPException(status_code=400, detail="帳號已存在")
-    db.add(User(
-        account=data.account,
-        password=get_password_hash(data.password),
-        name=data.name,
-        department=data.department,
-        role=data.role
-    ))
-    db.commit()
-    db.close()
-    return {"ok": True}
+@app.post("/query", response_model=QueryResponse)
+async def query_endpoint(request: QueryRequest):
+    qa = get_qa_system_for_api()
+    if not qa:
+        raise HTTPException(status_code=503, detail="QA system not available")
+    answer, source_type, cost_info = qa.ask(request.query, request.mode)
+    return QueryResponse(answer=answer, source_type=source_type, cost_info=cost_info)
 
-@app.put("/users/{account}")
-def update_user(account: str, data: UpdateProfileRequest, user: User = Depends(get_current_user)):
-    if user.role != "admin" and user.account != account:
-        raise HTTPException(status_code=403, detail="權限不足")
-    db = SessionLocal()
-    u = db.query(User).filter(User.account == account).first()
-    if not u:
-        db.close()
-        raise HTTPException(status_code=404, detail="查無此人")
-    u.name = data.name
-    u.department = data.department
-    db.commit()
-    db.close()
-    return {"ok": True}
+@app.get("/system/status")
+async def system_status():
+    qa = get_qa_system_for_api()
+    if not qa:
+        return {
+            "status": "not_loaded", 
+            "tech_files": 0, 
+            "tech_chunks": 0, 
+            "business_available": False,
+            "frontend_available": os.path.exists(FRONTEND_DIR)
+        }
+    return {
+        "status": "loaded",
+        "tech_files": qa.file_count,
+        "tech_chunks": qa.doc_count,
+        "business_available": qa.business_vectordb is not None,
+        "retriever_type": type(qa.tech_vectordb).__name__ if qa.tech_vectordb else "None",
+        "tech_vector_db_dir": os.getenv("TECH_VDB_DIR"),
+        "frontend_available": os.path.exists(FRONTEND_DIR)
+    }
 
-@app.put("/users/{account}/password")
-def reset_password(account: str, data: ResetPasswordRequest, user: User = Depends(get_current_user)):
-    if user.role != "admin" and user.account != account:
-        raise HTTPException(status_code=403, detail="權限不足")
-    db = SessionLocal()
-    u = db.query(User).filter(User.account == account).first()
-    if not u:
-        db.close()
-        raise HTTPException(status_code=404, detail="查無此人")
-    u.password = get_password_hash(data.password)
-    db.commit()
-    db.close()
-    return {"ok": True}
+@app.post("/system/reload")
+async def reload_system():
+    success = reload_qa_system_for_api()
+    if success:
+        qa = get_qa_system_for_api()
+        return {
+            "status": "success", 
+            "tech_files": qa.file_count if qa else 0, 
+            "tech_chunks": qa.doc_count if qa else 0
+        }
+    else:
+        raise HTTPException(status_code=500, detail="Failed to reload QA system")
 
-@app.put("/users/{account}/role")
-def update_role(account: str, data: UpdateRoleRequest, user: User = Depends(get_current_user)):
-    if user.role != "admin":
-        raise HTTPException(status_code=403, detail="管理員限定")
-    db = SessionLocal()
-    u = db.query(User).filter(User.account == account).first()
-    if not u:
-        db.close()
-        raise HTTPException(status_code=404, detail="查無此人")
-    u.role = data.role
-    db.commit()
-    db.close()
-    return {"ok": True}
+# ─────────────────────────────────────────────────────────────
+# 診斷路由
+# ─────────────────────────────────────────────────────────────
 
-@app.delete("/users/{account}")
-def delete_user(account: str, user: User = Depends(get_current_user)):
-    if user.role != "admin":
-        raise HTTPException(status_code=403, detail="管理員限定")
-    db = SessionLocal()
-    u = db.query(User).filter(User.account == account).first()
-    if not u:
-        db.close()
-        raise HTTPException(status_code=404, detail="查無此人")
-    db.delete(u)
-    db.commit()
-    db.close()
-    return {"ok": True}
+@app.get("/system/debug")
+async def debug_system():
+    qa = get_qa_system_for_api()
+    if not qa:
+        raise HTTPException(status_code=503, detail="QA system not available")
+    retriever = qa.tech_vectordb
+    return {
+        "retriever_class": type(retriever).__name__ if retriever else "None",
+        "has_main": hasattr(retriever, "main"),
+        "has_bm25": hasattr(retriever, "bm25"),
+        "tech_files": qa.file_count,
+        "tech_chunks": qa.doc_count,
+        "business_enabled": qa.business_vectordb is not None,
+        "frontend_dir": FRONTEND_DIR,
+        "frontend_exists": os.path.exists(FRONTEND_DIR)
+    }
 
-@app.get("/frontend/{file_path:path}")
-def get_frontend_file(file_path: str):
-    full_path = os.path.join(FRONTEND_DIR, file_path)
-    if not os.path.isfile(full_path):
-        raise HTTPException(status_code=404)
-    return FileResponse(full_path)
+@app.get("/system/files")
+async def list_files():
+    """列出前端文件結構"""
+    if not os.path.exists(FRONTEND_DIR):
+        return {"error": f"前端目錄不存在: {FRONTEND_DIR}"}
+    
+    files = []
+    for root, dirs, filenames in os.walk(FRONTEND_DIR):
+        for filename in filenames:
+            rel_path = os.path.relpath(os.path.join(root, filename), FRONTEND_DIR)
+            files.append(rel_path)
+    
+    return {"frontend_dir": FRONTEND_DIR, "files": files}
+
+# ─────────────────────────────────────────────────────────────
+# 錯誤處理
+# ─────────────────────────────────────────────────────────────
+
+@app.exception_handler(404)
+async def custom_404_handler(request: Request, exc):
+    """自定義 404 處理器"""
+    path = request.url.path
+    
+    # 如果是前端相關請求，嘗試返回 index.html
+    if path.startswith('/frontend/') and not path.endswith(('.js', '.css', '.png', '.jpg', '.ico')):
+        index_path = os.path.join(FRONTEND_DIR, "index.html")
+        if os.path.exists(index_path):
+            return FileResponse(index_path)
+    
+    # 返回 JSON 響應而不是字典
+    return JSONResponse(
+        status_code=404,
+        content={"error": "Not Found", "path": path, "message": "請求的資源不存在"}
+    )
+
+# ─────────────────────────────────────────────────────────────
+# 🆕 個人知識庫 API
+# ─────────────────────────────────────────────────────────────
+
+# 嘗試導入個人知識庫模組
+try:
+    from personal_kb import get_personal_kb, add_document as add_personal_doc, search_personal
+    PERSONAL_KB_ENABLED = True
+    logger.info("✅ 個人知識庫模組已載入")
+except ImportError as e:
+    PERSONAL_KB_ENABLED = False
+    logger.warning(f"⚠️ 個人知識庫模組未載入: {e}")
+
+
+@app.post("/kb/personal/upload")
+async def upload_personal_document(
+    file: UploadFile = File(...),
+    user_account: str = Query(default="default"),
+):
+    """上傳文件到個人知識庫"""
+    if not PERSONAL_KB_ENABLED:
+        raise HTTPException(status_code=503, detail="個人知識庫功能未啟用")
+    
+    # 檢查格式
+    allowed_ext = {'.docx', '.pdf', '.txt', '.md', '.xlsx', '.csv', '.png', '.jpg', '.jpeg', '.gif'}
+    ext = os.path.splitext(file.filename)[1].lower()
+    
+    if ext not in allowed_ext:
+        raise HTTPException(status_code=400, detail=f"不支援的格式: {ext}")
+    
+    # 儲存暫存檔
+    temp_dir = "/app/data/temp"
+    os.makedirs(temp_dir, exist_ok=True)
+    temp_path = os.path.join(temp_dir, f"{user_account}_{datetime.utcnow().strftime('%Y%m%d%H%M%S')}_{file.filename}")
+    
+    try:
+        content = await file.read()
+        
+        # 檢查大小 (50MB)
+        if len(content) > 50 * 1024 * 1024:
+            raise HTTPException(status_code=400, detail="檔案太大（上限 50MB）")
+        
+        with open(temp_path, 'wb') as f:
+            f.write(content)
+        
+        # 處理文件
+        result = add_personal_doc(user_account, temp_path, file.filename)
+        
+        return {
+            "success": result.get("success", False),
+            "message": "處理完成" if result.get("success") else result.get("error", "處理失敗"),
+            "doc_id": result.get("doc_id"),
+            "filename": file.filename,
+            "chunks": result.get("chunks"),
+            "images": result.get("images"),
+            "keywords": result.get("keywords", [])[:10],
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"個人文件上傳失敗: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+
+
+@app.get("/kb/personal/documents")
+async def list_personal_documents(user_account: str = Query(default="default")):
+    """列出個人知識庫的文件"""
+    if not PERSONAL_KB_ENABLED:
+        return {"success": False, "documents": [], "error": "個人知識庫未啟用"}
+    
+    try:
+        kb = get_personal_kb(user_account)
+        docs = kb.list_documents()
+        stats = kb.get_stats()
+        
+        return {
+            "success": True,
+            "user_id": user_account,
+            "documents": docs,
+            "stats": stats,
+        }
+    except Exception as e:
+        logger.error(f"列出個人文件失敗: {e}")
+        return {"success": False, "documents": [], "error": str(e)}
+
+
+@app.delete("/kb/personal/documents/{doc_id}")
+async def delete_personal_document(
+    doc_id: str,
+    user_account: str = Query(default="default"),
+):
+    """刪除個人知識庫的文件"""
+    if not PERSONAL_KB_ENABLED:
+        raise HTTPException(status_code=503, detail="個人知識庫未啟用")
+    
+    try:
+        kb = get_personal_kb(user_account)
+        success = kb.remove_document(doc_id)
+        
+        if success:
+            return {"success": True, "message": f"文件 {doc_id} 已刪除"}
+        else:
+            raise HTTPException(status_code=404, detail="文件不存在")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/kb/personal/{user_id}/images/{doc_id}/{image_name}")
+async def get_personal_image(user_id: str, doc_id: str, image_name: str):
+    """取得個人文件的圖片"""
+    if not PERSONAL_KB_ENABLED:
+        raise HTTPException(status_code=503, detail="個人知識庫未啟用")
+    
+    try:
+        kb = get_personal_kb(user_id)
+        image_path = kb.get_image_path(doc_id, image_name)
+        
+        if image_path and os.path.exists(image_path):
+            ext = os.path.splitext(image_name)[1].lower()
+            mime_types = {
+                '.png': 'image/png',
+                '.jpg': 'image/jpeg',
+                '.jpeg': 'image/jpeg',
+                '.gif': 'image/gif',
+            }
+            return FileResponse(
+                image_path,
+                media_type=mime_types.get(ext, 'image/png'),
+                headers={"Cache-Control": "max-age=86400"}
+            )
+        else:
+            raise HTTPException(status_code=404, detail="圖片不存在")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─────────────────────────────────────────────────────────────
+# 應用啟動 & 關閉事件
+# ─────────────────────────────────────────────────────────────
+
+@app.on_event("startup")
+async def startup_event():
+    """應用啟動事件 - 精簡輸出"""
+    print("=" * 50)
+    print("🚀 SanShin AI 系統啟動中...")
+    print("=" * 50)
+    
+    # 檢查前端文件（只在找不到時警告）
+    if not os.path.exists(FRONTEND_DIR):
+        logger.warning(f"⚠️ 前端目錄不存在: {FRONTEND_DIR}")
+    
+    # 初始化 QA 系統（get_qa_system_for_api 會處理日誌）
+    qa = get_qa_system_for_api()
+    if not qa:
+        logger.warning("⚠️ QA 系統載入失敗，部分功能可能不可用")
+    
+    print("=" * 50)
+    print("✅ SanShin AI 系統就緒")
+    print("=" * 50)
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    logger.info("🛑 關閉 SanShin AI 系統...")
+
+# ─────────────────────────────────────────────────────────────
+# 如果直接執行
+# ─────────────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")

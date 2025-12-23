@@ -23,3 +23,4 @@ class ChatLog(Base):
     answer = Column(Text)
     created_at = Column(DateTime, default=datetime.utcnow)
     user = relationship("User")
+    
