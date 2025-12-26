@@ -1,21 +1,28 @@
 {
-  "name": "SanShinAI",
+  "name": "SanShin AI",
   "short_name": "SanShinAI",
+  "description": "SanShin AI 智慧問答平台",
   "start_url": "/frontend/",
+  "scope": "/",
   "display": "standalone",
   "background_color": "#f8fafc",
   "theme_color": "#2563eb",
-  "description": "SanShinAI",
+  "orientation": "portrait-primary",
+  "lang": "zh-TW",
+  "categories": ["business", "productivity"],
   "icons": [
     {
       "src": "/frontend/icon/icon-192.png",
       "sizes": "192x192",
-      "type": "image/png"
+      "type": "image/png",
+      "purpose": "any maskable"
     },
     {
       "src": "/frontend/icon/icon-512.png",
       "sizes": "512x512",
-      "type": "image/png"
+      "type": "image/png",
+      "purpose": "any maskable"
     }
-  ]
+  ],
+  "prefer_related_applications": false
 }

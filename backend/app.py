@@ -946,6 +946,100 @@ async def get_personal_image(user_id: str, doc_id: str, image_name: str):
 
 
 # ─────────────────────────────────────────────────────────────
+# 業務 AI 查詢 API（BI 智能分析）
+# ─────────────────────────────────────────────────────────────
+
+try:
+    from business_ai_engine import BusinessAIEngine
+    _business_ai_engine = None
+    
+    def get_business_ai():
+        global _business_ai_engine
+        if _business_ai_engine is None:
+            _business_ai_engine = BusinessAIEngine()
+        return _business_ai_engine
+    
+    @app.post("/api/business/ai-query")
+    async def business_ai_query(request: Request, current_user: User = Depends(get_current_user_from_db)):
+        """
+        AI 驅動的業務查詢
+        
+        支援自然語言查詢，返回 BI 分析結果
+        """
+        data = await request.json()
+        query = data.get("query", "").strip()
+        
+        if not query:
+            return JSONResponse({
+                "success": False,
+                "error": "請輸入查詢內容"
+            }, status_code=400)
+        
+        try:
+            engine = get_business_ai()
+            result = engine.query(query)
+            
+            return JSONResponse({
+                "success": result.get("success", False),
+                "answer": result.get("answer", ""),
+                "insights": result.get("insights", []),
+                "recommendations": result.get("recommendations", []),
+                "visualizations": result.get("visualizations", []),
+                "data_summary": result.get("data_summary", {}),
+                "metadata": result.get("metadata", {}),
+            })
+        except Exception as e:
+            logger.error(f"業務 AI 查詢失敗: {e}")
+            return JSONResponse({
+                "success": False,
+                "error": str(e)
+            }, status_code=500)
+    
+    @app.get("/api/business/schema")
+    async def business_schema(current_user: User = Depends(get_current_user_from_db)):
+        """獲取業務數據 schema 信息"""
+        try:
+            engine = get_business_ai()
+            return JSONResponse(engine.get_schema_info())
+        except Exception as e:
+            return JSONResponse({"error": str(e)}, status_code=500)
+    
+    @app.get("/api/business/quick-stats")
+    async def business_quick_stats(current_user: User = Depends(get_current_user_from_db)):
+        """獲取業務快速統計（儀表板用）"""
+        try:
+            engine = get_business_ai()
+            return JSONResponse(engine.get_quick_stats())
+        except Exception as e:
+            return JSONResponse({"error": str(e)}, status_code=500)
+    
+    @app.post("/api/business/reload")
+    async def business_reload(current_user: User = Depends(get_current_user_from_db)):
+        """重新載入業務數據"""
+        if current_user.role != "admin":
+            raise HTTPException(status_code=403, detail="權限不足")
+        
+        try:
+            engine = get_business_ai()
+            engine.reload_data()
+            return JSONResponse({
+                "success": True,
+                "message": "業務數據已重新載入",
+                "schema": engine.get_schema_info()
+            })
+        except Exception as e:
+            return JSONResponse({
+                "success": False,
+                "error": str(e)
+            }, status_code=500)
+    
+    logger.info("✅ 業務 AI API 端點已註冊")
+
+except ImportError as e:
+    logger.warning(f"⚠️ 業務 AI 引擎未載入，相關 API 不可用: {e}")
+
+
+# ─────────────────────────────────────────────────────────────
 # 應用啟動 & 關閉事件
 # ─────────────────────────────────────────────────────────────
 

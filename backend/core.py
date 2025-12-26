@@ -24,6 +24,28 @@ from enum import Enum
 
 logger = logging.getLogger(__name__)
 
+# ═══════════════════════════════════════════════════════════════
+# AI 業務引擎（純 AI 驅動的 BI 查詢）
+# ═══════════════════════════════════════════════════════════════
+try:
+    from business_ai_engine import get_business_ai_engine
+    _HAS_BUSINESS_AI = True
+    logger.info("✅ AI 業務引擎已載入")
+except ImportError:
+    _HAS_BUSINESS_AI = False
+    logger.warning("⚠️ business_ai_engine 未載入，將使用傳統規則查詢")
+
+# ═══════════════════════════════════════════════════════════════
+# 查詢增強器（多語言術語擴展）
+# ═══════════════════════════════════════════════════════════════
+try:
+    from query_enhancer import enhance_query, EnhancedQuery
+    _HAS_QUERY_ENHANCER = True
+    logger.info("✅ 查詢增強器已載入")
+except ImportError:
+    _HAS_QUERY_ENHANCER = False
+    logger.warning("⚠️ query_enhancer 未載入，將使用基本查詢擴展")
+
 
 # ═══════════════════════════════════════════════════════════════
 # LLM Provider / .env 相容層（避免 .env 與 config.py 變數名不同步）
@@ -943,6 +965,10 @@ class CategorizedQASystem:
             ).strip()
 
         def _build(provider_name: str, model_name: str):
+            # 檢測是否為 o 系列推理模型（o1, o3, gpt-5 等）
+            model_lower = model_name.lower()
+            is_reasoning_model = any(x in model_lower for x in ['o1', 'o3', 'gpt-5', 'o4'])
+            
             if provider_name == "anthropic":
                 try:
                     from langchain_anthropic import ChatAnthropic
@@ -961,10 +987,19 @@ class CategorizedQASystem:
             except Exception as e:
                 raise RuntimeError("找不到 langchain_openai，請在 requirements 安裝 langchain-openai") from e
 
-            logger.info("🧠 LLM 選擇: provider=openai model=%s temperature=%s", model_name, temperature)
-            kwargs = {"model": model_name, "temperature": temperature}
-            if max_tokens is not None:
-                kwargs["max_tokens"] = max_tokens
+            logger.info("🧠 LLM 選擇: provider=openai model=%s temperature=%s reasoning=%s", model_name, temperature, is_reasoning_model)
+            
+            if is_reasoning_model:
+                # o 系列模型不支援 temperature 和 max_tokens
+                # 使用 model_kwargs 傳遞 max_completion_tokens
+                kwargs = {"model": model_name}
+                if max_tokens is not None:
+                    kwargs["model_kwargs"] = {"max_completion_tokens": max_tokens}
+            else:
+                kwargs = {"model": model_name, "temperature": temperature}
+                if max_tokens is not None:
+                    kwargs["max_tokens"] = max_tokens
+            
             return ChatOpenAI(**kwargs)
 
         provider = (os.getenv("LLM_PROVIDER") or "openai").strip().lower()
@@ -1009,6 +1044,7 @@ class CategorizedQASystem:
         # 不認識就當 openai（但也會印出來）
         logger.warning("Unknown LLM_PROVIDER=%s, fallback to openai", provider)
         return _build("openai", model)
+    
     def _search(
         self,
         query: str,
@@ -1016,79 +1052,115 @@ class CategorizedQASystem:
         top_k: int = 10,
     ) -> List[SearchResult]:
         """
-        三層檢索：關鍵字 + BM25 + 向量
+        增強版三層檢索：查詢增強 + 關鍵字 + BM25 + 向量
+        
+        新功能：
+        - 使用 AI 查詢增強器進行多語言擴展
+        - 對多個查詢變體進行搜索
+        - 合併去重後排序
         """
         results: List[SearchResult] = []
         seen_contents = set()
         
-        # 技術查詢擴展
-        expanded_query = query
-        if doc_type == "technical":
-            expanded_query = expand_technical_query(query)
+        # 使用查詢增強器（如果可用）
+        search_queries = [query]
+        enhanced = None
         
-        # 1. 關鍵字精確匹配
-        if self._keyword_index and self._keyword_index.index:
-            kw_results = self._keyword_index.search(query, top_k=top_k)
-            for doc_id, score in kw_results:
+        if doc_type == "technical" and _HAS_QUERY_ENHANCER:
+            try:
+                # 使用 LLM 增強（可配置關閉）
+                use_llm = os.getenv("QUERY_ENHANCE_LLM", "true").lower() == "true"
+                enhanced = enhance_query(query, use_llm=use_llm)
+                
+                # 獲取所有查詢變體（限制數量避免太慢）
+                all_queries = enhanced.get_all_queries()
+                search_queries = all_queries[:5]  # 最多 5 個變體
+                
+                logger.info(f"🔍 查詢增強: {len(search_queries)} 個變體")
+                
+            except Exception as e:
+                logger.warning(f"查詢增強失敗，使用原始查詢: {e}")
+                search_queries = [expand_technical_query(query)]
+        else:
+            # 降級到舊的擴展方式
+            if doc_type == "technical":
+                search_queries = [expand_technical_query(query)]
+        
+        # 對每個查詢變體進行搜索
+        for search_query in search_queries:
+            # 1. 關鍵字精確匹配（只對原始查詢和產品型號）
+            if self._keyword_index and self._keyword_index.index:
+                kw_results = self._keyword_index.search(search_query, top_k=top_k)
+                for doc_id, score in kw_results:
+                    try:
+                        doc_data = self._vectordb._collection.get(ids=[doc_id])
+                        if doc_data['documents']:
+                            content = doc_data['documents'][0]
+                            content_hash = hash(content[:200])
+                            if content_hash not in seen_contents:
+                                # 產品型號精確匹配加分
+                                bonus = 1.0
+                                if enhanced and enhanced.extracted_models:
+                                    for model in enhanced.extracted_models:
+                                        if model.upper() in content.upper():
+                                            bonus = 2.0
+                                            break
+                                
+                                results.append(SearchResult(
+                                    content=content,
+                                    source=doc_data['metadatas'][0].get('source', '') if doc_data['metadatas'] else '',
+                                    doc_type=doc_type,
+                                    score=score * 2 * bonus,
+                                    metadata={"match_type": "keyword", "doc_id": doc_id}
+                                ))
+                                seen_contents.add(content_hash)
+                    except:
+                        pass
+            
+            # 2. BM25 搜尋
+            if self._bm25:
                 try:
-                    doc_data = self._vectordb._collection.get(ids=[doc_id])
-                    if doc_data['documents']:
-                        content = doc_data['documents'][0]
-                        content_hash = hash(content[:200])
+                    bm25_docs = self._bm25.invoke(search_query)
+                    for doc in bm25_docs[:top_k]:
+                        content_hash = hash(doc.page_content[:200])
                         if content_hash not in seen_contents:
                             results.append(SearchResult(
-                                content=content,
-                                source=doc_data['metadatas'][0].get('source', '') if doc_data['metadatas'] else '',
+                                content=doc.page_content,
+                                source=doc.metadata.get("source", ""),
                                 doc_type=doc_type,
-                                score=score * 2,
-                                metadata={"match_type": "keyword", "doc_id": doc_id}
+                                score=1.5,
+                                metadata={"match_type": "bm25", "query_variant": search_query[:50]}
                             ))
                             seen_contents.add(content_hash)
-                except:
-                    pass
+                except Exception as e:
+                    logger.warning(f"BM25 搜尋失敗: {e}")
+            
+            # 3. 向量搜尋
+            if self._vectordb:
+                try:
+                    config = get_retriever_config(doc_type)
+                    vector_docs = self._vectordb.similarity_search_with_score(
+                        search_query, k=config.k
+                    )
+                    for doc, score in vector_docs:
+                        content_hash = hash(doc.page_content[:200])
+                        if content_hash not in seen_contents:
+                            results.append(SearchResult(
+                                content=doc.page_content,
+                                source=doc.metadata.get("source", ""),
+                                doc_type=doc_type,
+                                score=1.0 / (1.0 + score),
+                                metadata={"match_type": "vector", **doc.metadata}
+                            ))
+                            seen_contents.add(content_hash)
+                except Exception as e:
+                    logger.warning(f"向量搜尋失敗: {e}")
         
-        # 2. BM25 搜尋
-        if self._bm25:
-            try:
-                bm25_docs = self._bm25.invoke(expanded_query)
-                for doc in bm25_docs[:top_k]:
-                    content_hash = hash(doc.page_content[:200])
-                    if content_hash not in seen_contents:
-                        results.append(SearchResult(
-                            content=doc.page_content,
-                            source=doc.metadata.get("source", ""),
-                            doc_type=doc_type,
-                            score=1.5,
-                            metadata={"match_type": "bm25"}
-                        ))
-                        seen_contents.add(content_hash)
-            except Exception as e:
-                logger.warning(f"BM25 搜尋失敗: {e}")
-        
-        # 3. 向量搜尋
-        if self._vectordb:
-            try:
-                config = get_retriever_config(doc_type)
-                vector_docs = self._vectordb.similarity_search_with_score(
-                    expanded_query, k=config.k
-                )
-                for doc, score in vector_docs:
-                    content_hash = hash(doc.page_content[:200])
-                    if content_hash not in seen_contents:
-                        results.append(SearchResult(
-                            content=doc.page_content,
-                            source=doc.metadata.get("source", ""),
-                            doc_type=doc_type,
-                            score=1.0 / (1.0 + score),
-                            metadata={"match_type": "vector", **doc.metadata}
-                        ))
-                        seen_contents.add(content_hash)
-            except Exception as e:
-                logger.warning(f"向量搜尋失敗: {e}")
-        
-        # 4. Rerank
+        # 4. Rerank（使用原始查詢）
         if results:
             results = self.reranker.rerank(query, results)
+        
+        logger.info(f"📊 搜索結果: {len(results)} 筆（去重後）")
         
         return results[:top_k]
     
@@ -1104,9 +1176,43 @@ class CategorizedQASystem:
         llm_config = get_llm_config(doc_type, complexity)
         llm = self._get_llm(llm_config.model, llm_config.temperature)
         
-        # 準備上下文
+        # 準備上下文（清理 HTML 標籤和圖片路徑）
+        def clean_content(content: str) -> str:
+            """清理文檔內容，移除干擾 LLM 的元素"""
+            import re
+            # 移除 img 標籤
+            content = re.sub(r'<img[^>]*>', '', content)
+            # 移除 style 屬性
+            content = re.sub(r'\s*style="[^"]*"', '', content)
+            # 移除空的 HTML 標籤
+            content = re.sub(r'<(\w+)[^>]*>\s*</\1>', '', content)
+            # 移除 blockquote 標籤但保留內容
+            content = re.sub(r'</?blockquote>', '', content)
+            # 移除 table 相關標籤但嘗試保留結構
+            content = re.sub(r'</?table[^>]*>', '\n', content)
+            content = re.sub(r'</?thead[^>]*>', '', content)
+            content = re.sub(r'</?tbody[^>]*>', '', content)
+            content = re.sub(r'</?colgroup[^>]*>', '', content)
+            content = re.sub(r'<col[^>]*/?>', '', content)
+            content = re.sub(r'<tr[^>]*>', '\n', content)
+            content = re.sub(r'</tr>', '', content)
+            content = re.sub(r'<t[hd][^>]*>', ' | ', content)
+            content = re.sub(r'</t[hd]>', '', content)
+            # 移除其他常見 HTML 標籤
+            content = re.sub(r'</?p>', '\n', content)
+            content = re.sub(r'</?div[^>]*>', '\n', content)
+            content = re.sub(r'</?span[^>]*>', '', content)
+            # 移除連續的 ### 標記
+            content = re.sub(r'#{4,}', '', content)
+            # 移除圖片路徑
+            content = re.sub(r'/home/aiuser/[^\s]+\.(png|jpg|jpeg|gif)', '[圖片]', content)
+            # 清理多餘空行
+            content = re.sub(r'\n{3,}', '\n\n', content)
+            content = re.sub(r'[ \t]+', ' ', content)
+            return content.strip()
+        
         context_text = "\n\n---\n\n".join([
-            f"【來源: {os.path.basename(r.source) if r.source else '未知'}】\n{r.content}"
+            f"【來源: {os.path.basename(r.source) if r.source else '未知'}】\n{clean_content(r.content)}"
             for r in context
         ])
         
@@ -1114,13 +1220,42 @@ class CategorizedQASystem:
         prompt_template = PROMPTS.get(doc_type, PROMPTS["technical"])
         prompt = prompt_template.format(context=context_text, input=query)
         
-        # 生成回答
+        # 生成回答（帶 fallback）
+        used_model = llm_config.model
         try:
             response = llm.invoke(prompt)
             answer = response.content if hasattr(response, 'content') else str(response)
         except Exception as e:
-            logger.error(f"LLM 生成失敗: {e}")
-            answer = f"生成回答時發生錯誤：{e}"
+            error_msg = str(e)
+            # 檢查是否是 API 限額或配額錯誤
+            if "usage limits" in error_msg or "quota" in error_msg.lower() or "rate limit" in error_msg.lower():
+                logger.warning(f"⚠️ LLM 調用失敗（限額），嘗試 fallback: {e}")
+                # 嘗試 fallback 到另一個提供商
+                try:
+                    provider = (os.getenv("LLM_PROVIDER") or "openai").strip().lower()
+                    if provider == "auto":
+                        fallback_provider = (os.getenv("LLM_FALLBACK") or "openai").strip().lower()
+                    else:
+                        fallback_provider = "openai" if provider in ("anthropic", "claude") else "anthropic"
+                    
+                    # 選擇 fallback 模型
+                    if fallback_provider == "openai":
+                        fallback_model = os.getenv("OPENAI_MODEL_COMPLEX", "gpt-4o")
+                    else:
+                        fallback_model = os.getenv("ANTHROPIC_MODEL_COMPLEX", "claude-sonnet-4-20250514")
+                    
+                    logger.info(f"🔄 Fallback 到 {fallback_provider}: {fallback_model}")
+                    fallback_llm = self._get_llm(fallback_model, llm_config.temperature)
+                    response = fallback_llm.invoke(prompt)
+                    answer = response.content if hasattr(response, 'content') else str(response)
+                    used_model = fallback_model
+                    logger.info(f"✅ Fallback 成功: {fallback_provider}")
+                except Exception as fallback_e:
+                    logger.error(f"❌ Fallback 也失敗: {fallback_e}")
+                    answer = f"生成回答時發生錯誤：主要 LLM 限額，備用 LLM 也失敗。請稍後重試。"
+            else:
+                logger.error(f"LLM 生成失敗: {e}")
+                answer = f"生成回答時發生錯誤：{e}"
         
         # 添加來源
         if SOURCE_TRACKING.enabled and SOURCE_TRACKING.show_in_response:
@@ -1240,7 +1375,44 @@ class CategorizedQASystem:
         return answer, doc_type.value, info
     
     def _ask_business(self, query: str) -> Tuple[str, str, Dict]:
-        """業務查詢（CSV 直查）"""
+        """
+        業務查詢（AI 驅動 + 傳統回退）
+        
+        模式選擇：
+        - BUSINESS_QUERY_MODE=ai  → 使用 AI 引擎（預設）
+        - BUSINESS_QUERY_MODE=legacy → 使用傳統規則
+        """
+        use_ai = os.getenv("BUSINESS_QUERY_MODE", "ai").lower() == "ai"
+        
+        # 嘗試 AI 模式
+        if use_ai and _HAS_BUSINESS_AI:
+            try:
+                engine = get_business_ai_engine()
+                result = engine.query(query)
+                
+                if result.get("success"):
+                    return (
+                        result.get("answer", "查詢完成"),
+                        "business",
+                        {
+                            "sources": ["business_ai"],
+                            "insights": result.get("insights", []),
+                            "recommendations": result.get("recommendations", []),
+                            "visualizations": result.get("visualizations", []),
+                            "data_summary": result.get("data_summary", {}),
+                        }
+                    )
+                else:
+                    # AI 返回失敗，回退到傳統
+                    logger.warning("AI 業務查詢返回失敗，嘗試傳統方式")
+            except Exception as e:
+                logger.error(f"AI 業務查詢異常: {e}，回退到傳統方式")
+        
+        # 傳統模式（回退）
+        return self._ask_business_legacy(query)
+    
+    def _ask_business_legacy(self, query: str) -> Tuple[str, str, Dict]:
+        """業務查詢 - 傳統規則版本"""
         if not self._business_module:
             return "業務查詢模組未載入。", "error", {}
         
