@@ -1,4 +1,4 @@
-# 🧠 SanShin AI
+#  SanShin AI
 
 **SanShin AI** 是一個內部部署的智慧問答與業務分析平台，基於 FastAPI + LangChain + OpenAI/Anthropic 架構。
 
@@ -285,7 +285,7 @@ print(result['answer'])
 
 ---
 
-## 👨‍💻 維護者
+##  維護者
 
 Built with 💙 by SanShin Dev Team
 
