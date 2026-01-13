@@ -5,6 +5,7 @@
 2. 動態代碼生成 - AI 生成 Pandas 查詢代碼
 3. BI 分析層 - 趨勢分析、異常偵測、智能建議
 4. 自然語言回覆 - 將數據轉為人類易讀的洞察
+5. 支援從 PostgreSQL 資料庫讀取（不再依賴 CSV）
 
 使用方式：
     from business_ai_engine import BusinessAIEngine
@@ -36,6 +37,39 @@ try:
 except ImportError:
     _HAS_PANDAS = False
     logger.warning("pandas 未安裝，業務 AI 引擎將無法運作")
+
+# ═══════════════════════════════════════════════════════════════
+# 資料庫連接（PostgreSQL）
+# ═══════════════════════════════════════════════════════════════
+
+try:
+    import psycopg2
+    from psycopg2.extras import RealDictCursor
+    _HAS_PSYCOPG2 = True
+except ImportError:
+    _HAS_PSYCOPG2 = False
+    logger.warning("psycopg2 未安裝，無法從資料庫讀取")
+
+
+def get_db_connection():
+    """取得資料庫連接"""
+    if not _HAS_PSYCOPG2:
+        return None
+    
+    try:
+        conn = psycopg2.connect(
+            host=os.getenv('PG_HOST', '192.168.0.227'),
+            port=os.getenv('PG_PORT', '5432'),
+            database=os.getenv('PG_NAME', 'ai_db'),
+            user=os.getenv('PG_USER', 'ai_user'),
+            password=os.getenv('PG_PASSWORD', 'sanshin2025'),
+            cursor_factory=RealDictCursor
+        )
+        return conn
+    except Exception as e:
+        logger.error(f"資料庫連接失敗: {e}")
+        return None
+
 
 # ═══════════════════════════════════════════════════════════════
 # 數據結構
@@ -84,20 +118,17 @@ class AnalysisResult:
 # ═══════════════════════════════════════════════════════════════
 
 BUSINESS_DATA_SCHEMA = """
-業務日報 CSV 數據結構：
+業務日報數據結構（來源：PostgreSQL business.reports）：
 
 欄位說明：
-- Date: 日期 (格式: YYYY/MM/DD)
+- Date: 日期 (格式: YYYY-MM-DD)
 - Worker: 業務員姓名
 - Customer: 客戶名稱
 - Class: 活動類型 (如: 業務拜訪, 送貨, 報價, 電話聯繫, 會議, 維修服務)
 - Content: 活動內容描述
-- Depart: 營業所 (如: 台南營業所, 台中營業所, 高雄營業所, 台北營業所)
-- Manager: 主管姓名
-- Level: 等級
+- Depart: 營業所/部門 (如: 台南營業所, 台中營業所, 高雄營業所, 台北營業所)
+- Level: 等級 (A/B/C)
 - Doc_Status: 文件狀態
-- TimeCreated: 建立時間
-- Doc_Time: 文件時間
 
 執行環境已提供的變數（不需要 import）：
 - df: 業務數據 DataFrame
@@ -293,7 +324,7 @@ class LLMClient:
                 raise RuntimeError("需要安裝 openai 或 anthropic 套件")
     
     def chat(self, prompt: str, system: str = None, temperature: float = 0.1) -> str:
-        """發送聊天請求（帶 fallback）"""
+        """發送聊天請求"""
         try:
             if self.provider == "anthropic":
                 return self._chat_anthropic(prompt, system, temperature)
@@ -301,93 +332,25 @@ class LLMClient:
                 return self._chat_openai(prompt, system, temperature)
         except Exception as e:
             error_msg = str(e)
-            # 檢查是否是限額錯誤
-            if "usage limits" in error_msg or "quota" in error_msg.lower() or "rate limit" in error_msg.lower():
+            if "usage limits" in error_msg or "quota" in error_msg.lower():
                 logger.warning(f"⚠️ {self.provider} 限額，嘗試 fallback: {e}")
                 return self._fallback_chat(prompt, system, temperature)
             else:
                 raise
     
-    def _fallback_chat(self, prompt: str, system: str = None, temperature: float = 0.1) -> str:
-        """Fallback 到另一個提供商"""
-        if self.provider == "anthropic" and self.openai_key:
-            # Fallback 到 OpenAI
-            try:
-                from openai import OpenAI
-                fallback_client = OpenAI(api_key=self.openai_key)
-                fallback_model = os.getenv("OPENAI_MODEL_BUSINESS", "gpt-4o")
-                
-                messages = []
-                if system:
-                    messages.append({"role": "system", "content": system})
-                messages.append({"role": "user", "content": prompt})
-                
-                logger.info(f"🔄 Fallback 到 OpenAI: {fallback_model}")
-                response = fallback_client.chat.completions.create(
-                    model=fallback_model,
-                    messages=messages,
-                    temperature=temperature,
-                    max_tokens=4000,
-                )
-                logger.info("✅ Fallback 成功")
-                return response.choices[0].message.content
-            except Exception as e:
-                logger.error(f"❌ Fallback 到 OpenAI 也失敗: {e}")
-                raise
-        elif self.provider == "openai" and self.anthropic_key:
-            # Fallback 到 Anthropic
-            try:
-                from anthropic import Anthropic
-                fallback_client = Anthropic(api_key=self.anthropic_key)
-                fallback_model = os.getenv("ANTHROPIC_MODEL_BUSINESS", "claude-sonnet-4-20250514")
-                
-                kwargs = {
-                    "model": fallback_model,
-                    "max_tokens": 4000,
-                    "messages": [{"role": "user", "content": prompt}],
-                }
-                if system:
-                    kwargs["system"] = system
-                
-                logger.info(f"🔄 Fallback 到 Anthropic: {fallback_model}")
-                response = fallback_client.messages.create(**kwargs)
-                logger.info("✅ Fallback 成功")
-                return response.content[0].text
-            except Exception as e:
-                logger.error(f"❌ Fallback 到 Anthropic 也失敗: {e}")
-                raise
-        else:
-            raise RuntimeError("無可用的 fallback 提供商")
-    
     def _chat_openai(self, prompt: str, system: str = None, temperature: float = 0.1) -> str:
-        """OpenAI 聊天（支援 o 系列推理模型）"""
+        """OpenAI 聊天"""
         messages = []
         if system:
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
         
-        # 檢測是否為 o 系列模型（o1, o3, gpt-5 等）
-        # 這些模型不支援 max_tokens，要用 max_completion_tokens
-        # 也不支援 temperature 參數
-        model_lower = self.model.lower()
-        is_reasoning_model = any(x in model_lower for x in ['o1', 'o3', 'gpt-5', 'o4'])
-        
-        if is_reasoning_model:
-            # o 系列模型的參數
-            response = self._client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                max_completion_tokens=4000,
-                # o 系列不支援 temperature
-            )
-        else:
-            # 標準模型的參數
-            response = self._client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                temperature=temperature,
-                max_tokens=4000,
-            )
+        response = self._client.chat.completions.create(
+            model=self.model,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=4000,
+        )
         return response.choices[0].message.content
     
     def _chat_anthropic(self, prompt: str, system: str = None, temperature: float = 0.1) -> str:
@@ -402,6 +365,27 @@ class LLMClient:
         
         response = self._client.messages.create(**kwargs)
         return response.content[0].text
+    
+    def _fallback_chat(self, prompt: str, system: str = None, temperature: float = 0.1) -> str:
+        """Fallback 到另一個提供商"""
+        if self.provider == "anthropic" and self.openai_key:
+            from openai import OpenAI
+            fallback_client = OpenAI(api_key=self.openai_key)
+            fallback_model = os.getenv("OPENAI_MODEL_BUSINESS", "gpt-4o")
+            
+            messages = []
+            if system:
+                messages.append({"role": "system", "content": system})
+            messages.append({"role": "user", "content": prompt})
+            
+            response = fallback_client.chat.completions.create(
+                model=fallback_model,
+                messages=messages,
+                temperature=temperature,
+                max_tokens=4000,
+            )
+            return response.choices[0].message.content
+        raise RuntimeError("無可用的 LLM 提供商")
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -411,19 +395,22 @@ class LLMClient:
 class BusinessAIEngine:
     """純 AI 驅動的業務智能查詢引擎"""
     
-    def __init__(self, csv_path: str = None):
+    def __init__(self, csv_path: str = None, use_database: bool = True):
         """
         初始化引擎
         
         Args:
             csv_path: 業務 CSV 檔案路徑（可選，會自動偵測）
+            use_database: 是否優先從資料庫讀取（預設 True）
         """
         if not _HAS_PANDAS:
             raise RuntimeError("需要安裝 pandas: pip install pandas")
         
+        self.use_database = use_database and _HAS_PSYCOPG2
         self.csv_path = csv_path or self._detect_csv_path()
         self.llm = LLMClient()
         self.df = None
+        self.data_source = None  # 'database' 或 'csv'
         self._load_data()
     
     def _detect_csv_path(self) -> Optional[str]:
@@ -441,7 +428,73 @@ class BusinessAIEngine:
         return None
     
     def _load_data(self):
-        """載入並預處理數據"""
+        """載入並預處理數據（優先從資料庫）"""
+        # 嘗試從資料庫載入
+        if self.use_database:
+            if self._load_data_from_database():
+                return
+            logger.warning("資料庫載入失敗，嘗試 CSV fallback")
+        
+        # Fallback 到 CSV
+        self._load_data_from_csv()
+    
+    def _load_data_from_database(self) -> bool:
+        """從 PostgreSQL 資料庫載入業務日報"""
+        conn = get_db_connection()
+        if not conn:
+            return False
+        
+        try:
+            cursor = conn.cursor()
+            
+            # 查詢業務日報（最近 12 個月）
+            cursor.execute('''
+                SELECT 
+                    r.report_date as "Date",
+                    u.name as "Worker",
+                    r.customer_name as "Customer",
+                    r.activity_class as "Class",
+                    r.content as "Content",
+                    u.department as "Depart",
+                    r.level as "Level",
+                    r.status as "Doc_Status",
+                    r.created_at as "TimeCreated"
+                FROM business.reports r
+                JOIN public.users u ON r.user_id = u.id
+                WHERE r.report_date >= CURRENT_DATE - INTERVAL '12 months'
+                ORDER BY r.report_date DESC
+            ''')
+            
+            rows = cursor.fetchall()
+            
+            if not rows:
+                logger.warning("資料庫中沒有業務日報資料")
+                return False
+            
+            # 轉換為 DataFrame
+            self.df = pd.DataFrame([dict(row) for row in rows])
+            
+            # 預處理日期
+            self.df['Date'] = pd.to_datetime(self.df['Date']).dt.strftime('%Y/%m/%d')
+            self.df['_Date'] = pd.to_datetime(self.df['Date'], errors='coerce')
+            
+            # 清理空值
+            for col in ['Worker', 'Customer', 'Class', 'Depart', 'Content']:
+                if col in self.df.columns:
+                    self.df[col] = self.df[col].fillna('').astype(str)
+            
+            self.data_source = 'database'
+            logger.info(f"✅ 從資料庫載入業務數據: {len(self.df)} 筆記錄")
+            return True
+            
+        except Exception as e:
+            logger.error(f"從資料庫載入失敗: {e}")
+            return False
+        finally:
+            conn.close()
+    
+    def _load_data_from_csv(self):
+        """從 CSV 載入數據（fallback）"""
         if not self.csv_path or not os.path.exists(self.csv_path):
             logger.warning(f"業務 CSV 不存在: {self.csv_path}")
             return
@@ -458,7 +511,8 @@ class BusinessAIEngine:
                 if col in self.df.columns:
                     self.df[col] = self.df[col].fillna('').astype(str)
             
-            logger.info(f"✅ 載入業務數據: {len(self.df)} 筆記錄")
+            self.data_source = 'csv'
+            logger.info(f"✅ 從 CSV 載入業務數據: {len(self.df)} 筆記錄")
         except Exception as e:
             logger.error(f"載入業務數據失敗: {e}")
             self.df = None
@@ -476,7 +530,6 @@ class BusinessAIEngine:
         
         try:
             response = self.llm.chat(prompt, temperature=0.0)
-            # 清理 markdown 標記
             response = response.strip()
             if response.startswith("```"):
                 response = re.sub(r'^```\w*\n?', '', response)
@@ -484,7 +537,7 @@ class BusinessAIEngine:
             
             return json.loads(response)
         except json.JSONDecodeError as e:
-            logger.warning(f"意圖解析 JSON 錯誤: {e}, 原始回應: {response[:500]}")
+            logger.warning(f"意圖解析 JSON 錯誤: {e}")
             return {"intent": "search", "filters": {}, "metrics": []}
         except Exception as e:
             logger.error(f"意圖解析失敗: {e}")
@@ -501,308 +554,168 @@ class BusinessAIEngine:
         
         try:
             response = self.llm.chat(prompt, temperature=0.0)
-            
-            # 清理 markdown 標記
             code = response.strip()
+            
+            # 清理 markdown
             if code.startswith("```"):
                 code = re.sub(r'^```\w*\n?', '', code)
                 code = re.sub(r'\n?```$', '', code)
             
-            return code
+            # 移除 import
+            code = re.sub(r'^import\s+.*$', '', code, flags=re.MULTILINE)
+            code = re.sub(r'^from\s+.*import\s+.*$', '', code, flags=re.MULTILINE)
+            
+            return code.strip()
         except Exception as e:
             logger.error(f"代碼生成失敗: {e}")
             return ""
     
-    def _preprocess_code(self, code: str) -> str:
-        """
-        預處理 AI 生成的代碼，修復常見問題
-        """
-        if not code:
-            return code
-        
-        # 1. 移除 markdown 代碼塊標記
-        code = re.sub(r'^```\w*\n?', '', code.strip())
-        code = re.sub(r'\n?```$', '', code)
-        
-        # 2. 移除 import 語句（我們已經提供了所需模組）
-        lines = code.split('\n')
-        cleaned_lines = []
-        for line in lines:
-            stripped = line.strip()
-            if stripped.startswith('import ') or stripped.startswith('from '):
-                logger.debug(f"移除 import 語句: {stripped}")
-                continue
-            cleaned_lines.append(line)
-        code = '\n'.join(cleaned_lines)
-        
-        # 3. 修復括號不匹配問題
-        code = self._fix_brackets(code)
-        
-        return code
-    
-    def _fix_brackets(self, code: str) -> str:
-        """
-        修復括號不匹配問題
-        """
-        # 計算各類括號的數量
-        open_parens = code.count('(')
-        close_parens = code.count(')')
-        open_brackets = code.count('[')
-        close_brackets = code.count(']')
-        open_braces = code.count('{')
-        close_braces = code.count('}')
-        
-        # 補齊缺少的右括號
-        if open_parens > close_parens:
-            missing = open_parens - close_parens
-            code = code.rstrip() + ')' * missing
-            logger.debug(f"補齊 {missing} 個右小括號")
-        
-        if open_brackets > close_brackets:
-            missing = open_brackets - close_brackets
-            code = code.rstrip() + ']' * missing
-            logger.debug(f"補齊 {missing} 個右中括號")
-        
-        if open_braces > close_braces:
-            missing = open_braces - close_braces
-            code = code.rstrip() + '}' * missing
-            logger.debug(f"補齊 {missing} 個右大括號")
-        
-        return code
-    
-    def _execute_code(self, code: str) -> Tuple[Any, Dict, str]:
-        """
-        安全執行生成的代碼
-        
-        Returns:
-            (result, summary, error_message)
-        """
+    def _execute_code(self, code: str) -> Tuple[Any, Dict, Optional[str]]:
+        """執行生成的代碼"""
         if self.df is None or self.df.empty:
             return None, {}, "數據未載入"
         
-        # 準備安全的內建函數子集
+        local_vars = {
+            'df': self.df.copy(),
+            'pd': pd,
+            'datetime': datetime,
+            'timedelta': timedelta,
+            're': re,
+        }
+        
+        # Provide safe built-in functions for code execution
         safe_builtins = {
             'len': len,
-            'str': str,
             'int': int,
+            'str': str,
             'float': float,
             'bool': bool,
             'list': list,
             'dict': dict,
             'tuple': tuple,
             'set': set,
-            'range': range,
-            'enumerate': enumerate,
-            'zip': zip,
-            'map': map,
-            'filter': filter,
-            'sorted': sorted,
             'sum': sum,
             'min': min,
             'max': max,
             'abs': abs,
             'round': round,
-            'any': any,
-            'all': all,
-            'isinstance': isinstance,
-            'hasattr': hasattr,
-            'getattr': getattr,
-            'print': print,  # 用於調試
+            'sorted': sorted,
+            'enumerate': enumerate,
+            'zip': zip,
+            'range': range,
             'True': True,
             'False': False,
             'None': None,
         }
         
-        # 準備執行環境
-        local_vars = {
-            'df': self.df.copy(),
-            'pd': pd,
-            'datetime': datetime,
-            'timedelta': timedelta,
-            're': re,  # 正則表達式
-        }
-        
-        # 預處理代碼：清理和修復常見問題
-        code = self._preprocess_code(code)
-        
         try:
             exec(code, {"__builtins__": safe_builtins}, local_vars)
             
-            result = local_vars.get('result', local_vars.get('filtered', None))
+            result = local_vars.get('result')
             summary = local_vars.get('summary', {})
             
-            # 如果沒有 summary，自動生成
-            if not summary and result is not None:
-                if isinstance(result, pd.DataFrame):
-                    summary = {
-                        'total_records': len(result),
-                        'columns': list(result.columns),
-                    }
-                elif isinstance(result, pd.Series):
-                    summary = {
-                        'total_items': len(result),
-                        'top_values': result.head(5).to_dict(),
-                    }
+            if result is None:
+                result = local_vars.get('filtered')
             
-            return result, summary, ""
+            return result, summary, None
             
         except Exception as e:
-            error_msg = f"代碼執行錯誤: {str(e)}\n{traceback.format_exc()}"
-            logger.error(error_msg)
-            return None, {}, error_msg
+            logger.error(f"代碼執行錯誤: {e}\n代碼:\n{code}")
+            return None, {}, str(e)
     
-    def _fallback_query(self, query: str, intent: Dict) -> Tuple[Any, Dict, str]:
-        """
-        當 AI 生成代碼失敗時的 fallback 查詢
-        基於 intent 中的關鍵信息進行簡單過濾
-        """
+    def _fallback_query(self, query: str, intent: Dict) -> Tuple[Any, Dict, Optional[str]]:
+        """簡單的 fallback 查詢"""
+        if self.df is None or self.df.empty:
+            return None, {}, "數據未載入"
+        
         try:
             df = self.df.copy()
             mask = pd.Series([True] * len(df))
             
-            filters = intent.get("filters", {})
-            time_range = intent.get("time_range", {})
+            filters = intent.get('filters', {})
             
-            # 時間過濾
-            if time_range.get("start"):
-                try:
-                    start = pd.Timestamp(time_range["start"])
-                    mask = mask & (df['_Date'] >= start)
-                except:
-                    pass
+            if filters.get('branch'):
+                mask = mask & df['Depart'].str.contains(filters['branch'], na=False)
             
-            if time_range.get("end"):
-                try:
-                    end = pd.Timestamp(time_range["end"])
-                    mask = mask & (df['_Date'] <= end)
-                except:
-                    pass
+            if filters.get('worker'):
+                mask = mask & df['Worker'].str.contains(filters['worker'], na=False)
             
-            # 根據月份過濾（從 time_range.value 提取）
-            time_value = time_range.get("value", "")
-            if "月" in str(time_value):
-                month_match = re.search(r'(\d+)\s*月', str(time_value))
-                if month_match:
-                    month = int(month_match.group(1))
-                    year = datetime.now().year
-                    # 如果提到的月份大於當前月份，可能是去年
-                    if month > datetime.now().month:
-                        year -= 1
-                    mask = mask & (df['_Date'].dt.month == month) & (df['_Date'].dt.year == year)
+            if filters.get('customer'):
+                mask = mask & df['Customer'].str.contains(filters['customer'], na=False)
             
-            # 客戶過濾
-            if filters.get("customer"):
-                customer = filters["customer"]
-                mask = mask & (df['Customer'].astype(str).str.contains(customer, na=False, case=False))
-            
-            # 業務員過濾
-            if filters.get("worker"):
-                worker = filters["worker"]
-                mask = mask & (df['Worker'].astype(str).str.contains(worker, na=False, case=False))
-            
-            # 營業所過濾
-            if filters.get("branch"):
-                branch = filters["branch"]
-                mask = mask & (df['Depart'].astype(str).str.contains(branch, na=False, case=False))
-            
-            # 活動類型過濾
-            if filters.get("activity_type"):
-                activity = filters["activity_type"]
-                mask = mask & (df['Class'].astype(str).str.contains(activity, na=False, case=False))
-            
-            # 從查詢文字中提取關鍵字作為補充過濾
-            keywords_to_check = ['拜訪', '送貨', '報價', '維修', '會議']
-            for kw in keywords_to_check:
-                if kw in query:
-                    mask = mask & (df['Class'].astype(str).str.contains(kw, na=False))
-                    break
+            time_range = intent.get('time_range', {})
+            if time_range.get('start'):
+                start = pd.Timestamp(time_range['start'])
+                mask = mask & (df['_Date'] >= start)
+            if time_range.get('end'):
+                end = pd.Timestamp(time_range['end'])
+                mask = mask & (df['_Date'] <= end)
             
             filtered = df[mask]
             
-            # 選擇顯示的欄位
-            display_cols = ['Date', 'Worker', 'Customer', 'Class', 'Content', 'Depart']
-            available_cols = [c for c in display_cols if c in filtered.columns]
-            result = filtered[available_cols].copy()
-            
             summary = {
-                'total_records': len(result),
+                'total_records': len(filtered),
                 'unique_workers': filtered['Worker'].nunique() if len(filtered) > 0 else 0,
                 'unique_customers': filtered['Customer'].nunique() if len(filtered) > 0 else 0,
             }
             
-            logger.info(f"Fallback 查詢結果: {len(result)} 筆記錄")
-            return result, summary, ""
+            result = filtered[['Date', 'Worker', 'Customer', 'Class', 'Content']].head(100)
+            
+            return result, summary, None
             
         except Exception as e:
-            error_msg = f"Fallback 查詢錯誤: {str(e)}"
-            logger.error(error_msg)
-            return None, {}, error_msg
+            return None, {}, str(e)
     
     def _analyze_result(self, query: str, result: Any, summary: Dict) -> Dict:
-        """使用 AI 分析結果並生成洞察"""
-        # 準備結果預覽
+        """使用 AI 分析結果"""
         if isinstance(result, pd.DataFrame):
-            result_preview = result.head(20).to_string() if len(result) > 0 else "無數據"
-        elif isinstance(result, pd.Series):
-            result_preview = result.head(20).to_string()
-        elif isinstance(result, dict):
-            result_preview = json.dumps(result, ensure_ascii=False, indent=2)
+            result_preview = result.head(30).to_string() if len(result) > 0 else "（無數據）"
         else:
             result_preview = str(result)[:2000]
         
         prompt = ANALYSIS_PROMPT.format(
             query=query,
             summary=json.dumps(summary, ensure_ascii=False, default=str),
-            result_preview=result_preview[:3000]  # 限制長度
+            result_preview=result_preview
         )
         
         try:
-            response = self.llm.chat(prompt, temperature=0.2)
-            
-            # 清理 markdown 標記
+            response = self.llm.chat(prompt, temperature=0.3)
             response = response.strip()
             if response.startswith("```"):
                 response = re.sub(r'^```\w*\n?', '', response)
                 response = re.sub(r'\n?```$', '', response)
             
             return json.loads(response)
-        except json.JSONDecodeError:
-            # 如果 JSON 解析失敗，返回純文字回答
+        except:
             return {
-                "direct_answer": response[:500] if response else "分析完成",
+                "direct_answer": "查詢完成，請查看下方數據。",
                 "insights": [],
-                "recommendations": [],
-            }
-        except Exception as e:
-            logger.error(f"結果分析失敗: {e}")
-            return {
-                "direct_answer": "分析過程發生錯誤",
-                "insights": [],
+                "trends": [],
+                "anomalies": [],
                 "recommendations": [],
             }
     
-    def _format_output(self, query: str, result: Any, summary: Dict, 
-                       analysis: Dict, code: str) -> AnalysisResult:
+    def _format_output(self, query: str, result: Any, summary: Dict, analysis: Dict, code: str) -> AnalysisResult:
         """格式化最終輸出"""
-        # 組合自然語言回答
         answer_parts = []
         
         # 直接回答
         if analysis.get("direct_answer"):
-            answer_parts.append(analysis["direct_answer"])
+            answer_parts.append(f"📊 {analysis['direct_answer']}")
         
         # 數據摘要
-        if summary:
-            answer_parts.append("\n\n📊 **數據摘要**")
-            for k, v in summary.items():
-                if k not in ('columns',):  # 跳過技術欄位
-                    answer_parts.append(f"- {k}: {v}")
+        answer_parts.append(f"\n\n**數據摘要**")
+        answer_parts.append(f"- 總記錄數：{summary.get('total_records', 0)}")
+        answer_parts.append(f"- 業務員數：{summary.get('unique_workers', 0)}")
+        answer_parts.append(f"- 客戶數：{summary.get('unique_customers', 0)}")
+        answer_parts.append(f"- 資料來源：{self.data_source or 'unknown'}")
         
         # 洞察
         if analysis.get("insights"):
             answer_parts.append("\n\n💡 **關鍵洞察**")
-            for i, insight in enumerate(analysis["insights"], 1):
-                answer_parts.append(f"{i}. {insight}")
+            for insight in analysis["insights"]:
+                answer_parts.append(f"- {insight}")
         
         # 趨勢
         if analysis.get("trends"):
@@ -810,19 +723,13 @@ class BusinessAIEngine:
             for trend in analysis["trends"]:
                 answer_parts.append(f"- {trend}")
         
-        # 異常
-        if analysis.get("anomalies"):
-            answer_parts.append("\n\n⚠️ **值得注意**")
-            for anomaly in analysis["anomalies"]:
-                answer_parts.append(f"- {anomaly}")
-        
         # 建議
         if analysis.get("recommendations"):
             answer_parts.append("\n\n✅ **建議行動**")
             for rec in analysis["recommendations"]:
                 answer_parts.append(f"- {rec}")
         
-        # 數據表格（如果有）
+        # 數據表格
         if isinstance(result, pd.DataFrame) and len(result) > 0 and len(result) <= 50:
             answer_parts.append("\n\n📋 **詳細數據**")
             answer_parts.append(self._df_to_markdown(result.head(30)))
@@ -840,6 +747,7 @@ class BusinessAIEngine:
             metadata={
                 "query": query,
                 "llm_model": self.llm.model,
+                "data_source": self.data_source,
                 "timestamp": datetime.now().isoformat(),
             }
         )
@@ -852,16 +760,14 @@ class BusinessAIEngine:
         df_show = df.head(max_rows)
         cols = list(df_show.columns)
         
-        # 表頭
         header = "| " + " | ".join(str(c) for c in cols) + " |"
         sep = "|" + "|".join(["---"] * len(cols)) + "|"
         
-        # 內容
         rows = []
         for _, r in df_show.iterrows():
             row_vals = []
             for c in cols:
-                val = str(r.get(c, ""))[:60]  # 截斷過長
+                val = str(r.get(c, ""))[:60]
                 val = val.replace("|", "｜").replace("\n", " ")
                 row_vals.append(val)
             rows.append("| " + " | ".join(row_vals) + " |")
@@ -880,63 +786,45 @@ class BusinessAIEngine:
                 "answer": "自然語言回答",
                 "success": True/False,
                 "data_summary": {...},
-                "insights": [...],
-                "recommendations": [...],
-                "visualizations": [...],
-                "metadata": {...}
+                "data_source": "database" | "csv",
+                ...
             }
         """
         if not query or not query.strip():
-            return {
-                "answer": "請輸入有效的查詢。",
-                "success": False,
-            }
+            return {"answer": "請輸入有效的查詢。", "success": False}
         
         if self.df is None or self.df.empty:
-            return {
-                "answer": "業務數據未載入。請確認 CSV 檔案是否存在。",
-                "success": False,
-            }
+            return {"answer": "業務數據未載入。請確認資料庫連接或 CSV 檔案。", "success": False}
         
         try:
             # Step 1: AI 解析意圖
             logger.info(f"🔍 解析查詢意圖: {query[:50]}...")
             intent = self._parse_intent(query)
-            logger.debug(f"意圖: {json.dumps(intent, ensure_ascii=False)}")
             
             # Step 2: AI 生成代碼
             logger.info("🔧 生成查詢代碼...")
             code = self._generate_code(query, intent)
-            logger.debug(f"生成代碼:\n{code}")
             
             if not code:
-                return {
-                    "answer": "無法生成查詢代碼。請嘗試換個方式描述您的問題。",
-                    "success": False,
-                }
+                return {"answer": "無法生成查詢代碼。", "success": False}
             
             # Step 3: 執行代碼
             logger.info("⚡ 執行查詢...")
             result, summary, error = self._execute_code(code)
             
             if error:
-                # 代碼執行失敗，嘗試簡單的 fallback 查詢
-                logger.warning(f"代碼執行失敗，嘗試 fallback 查詢: {error}")
+                logger.warning(f"代碼執行失敗，嘗試 fallback: {error}")
                 result, summary, fallback_error = self._fallback_query(query, intent)
                 
                 if fallback_error or result is None:
-                    return {
-                        "answer": f"查詢執行時發生錯誤。\n\n技術細節：{error[:500]}",
-                        "success": False,
-                        "code": code,
-                    }
-                logger.info("✅ Fallback 查詢成功")
+                    return {"answer": f"查詢執行錯誤：{error[:500]}", "success": False}
             
-            if result is None or (isinstance(result, (pd.DataFrame, pd.Series)) and len(result) == 0):
+            if result is None or (isinstance(result, pd.DataFrame) and len(result) == 0):
                 return {
-                    "answer": "查詢完成，但未找到符合條件的數據。請嘗試調整查詢條件。",
+                    "answer": "查詢完成，但未找到符合條件的數據。",
                     "success": True,
                     "data_summary": summary,
+                    "data_source": self.data_source,
                 }
             
             # Step 4: AI 分析結果
@@ -950,6 +838,7 @@ class BusinessAIEngine:
                 "answer": output.answer,
                 "success": True,
                 "data_summary": output.data_summary,
+                "data_source": self.data_source,
                 "insights": output.insights,
                 "recommendations": output.recommendations,
                 "visualizations": output.visualizations,
@@ -958,18 +847,16 @@ class BusinessAIEngine:
             
         except Exception as e:
             logger.error(f"查詢失敗: {e}\n{traceback.format_exc()}")
-            return {
-                "answer": f"查詢過程發生錯誤：{str(e)}",
-                "success": False,
-            }
+            return {"answer": f"查詢過程發生錯誤：{str(e)}", "success": False}
     
     def get_schema_info(self) -> Dict:
-        """獲取數據 schema 信息（供前端使用）"""
+        """獲取數據 schema 信息"""
         if self.df is None:
             return {"loaded": False}
         
         return {
             "loaded": True,
+            "data_source": self.data_source,
             "total_records": len(self.df),
             "columns": list(self.df.columns),
             "date_range": {
@@ -981,11 +868,10 @@ class BusinessAIEngine:
                 "customers": self.df['Customer'].nunique() if 'Customer' in self.df.columns else 0,
                 "branches": self.df['Depart'].unique().tolist() if 'Depart' in self.df.columns else [],
             },
-            "sample_activity_types": self.df['Class'].value_counts().head(10).to_dict() if 'Class' in self.df.columns else {},
         }
     
     def get_quick_stats(self) -> Dict:
-        """獲取快速統計（儀表板用）"""
+        """獲取快速統計"""
         if self.df is None:
             return {}
         
@@ -995,6 +881,7 @@ class BusinessAIEngine:
         recent = self.df[self.df['_Date'].dt.date >= last_30_days] if '_Date' in self.df.columns else self.df
         
         return {
+            "data_source": self.data_source,
             "total_records": len(self.df),
             "recent_30_days": len(recent),
             "active_workers": recent['Worker'].nunique() if 'Worker' in recent.columns else 0,
@@ -1020,12 +907,6 @@ def get_business_ai_engine() -> BusinessAIEngine:
 def ai_business_query(query: str) -> str:
     """
     AI 業務查詢（簡化接口，向後兼容）
-    
-    Args:
-        query: 自然語言查詢
-    
-    Returns:
-        格式化的回答字串
     """
     engine = get_business_ai_engine()
     result = engine.query(query)
@@ -1037,8 +918,6 @@ def ai_business_query(query: str) -> str:
 # ═══════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
-    import sys
-    
     logging.basicConfig(level=logging.INFO)
     
     engine = BusinessAIEngine()

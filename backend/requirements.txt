@@ -9,6 +9,7 @@ psycopg2-binary==2.9.9
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
 bcrypt==4.0.1
+werkzeug>=3.0.0
 
 # --- LangChain stack (SAME LINE: 0.3.x core) ---
 langchain==0.3.27
@@ -51,3 +52,20 @@ tiktoken==0.12.0
 
 # --- Guardrail: avoid numpy 2.x surprises ---
 numpy<2
+
+# --- Testing ---
+pytest==7.4.3
+pytest-asyncio==0.21.1
+pytest-cov==4.1.0
+pytest-mock==3.12.0
+
+# --- Monitoring & Rate Limiting ---
+prometheus-fastapi-instrumentator==6.1.0
+prometheus-client==0.19.0
+slowapi==0.1.9
+
+# --- Code Quality (Optional) ---
+black==23.12.1
+flake8==7.0.0
+mypy==1.7.1
+isort==5.13.2

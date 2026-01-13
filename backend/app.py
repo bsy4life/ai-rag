@@ -44,6 +44,19 @@ else:
 from core import get_qa_system, reload_qa_system
 from utils import cost_estimator
 
+# 導入新的中介層和錯誤處理
+try:
+    from middleware import error_handling_middleware, limiter
+    from middleware.error_handler import (
+        LLMError, DatabaseError, VectorDBError, 
+        AuthenticationError, RateLimitError
+    )
+    from slowapi.errors import RateLimitExceeded
+    from slowapi import _rate_limit_exceeded_handler
+    _HAS_MIDDLEWARE = True
+except ImportError as e:
+    _HAS_MIDDLEWARE = False
+
 # 導入數據庫和認證相關模組
 from models import Base, User, ChatLog
 from auth import verify_password, get_password_hash
@@ -71,8 +84,19 @@ logger = logging.getLogger(__name__)
 # 降低第三方庫的日誌級別
 for noisy_logger in ["uvicorn.access", "uvicorn.error", "httpcore", "httpx"]:
     logging.getLogger(noisy_logger).setLevel(logging.WARNING)
+
+# 記錄中介層載入狀態
+if _HAS_MIDDLEWARE:
+    logger.info("✅ 已載入新的中介層和速率限制")
+else:
+    logger.warning("⚠️ 中介層載入失敗（使用舊版）")
+
 # 全域變數，記錄每個 chat_id 的查詢狀態
 business_query_state = {}  # {chat_id: {"last_query": str, "offset": int}}
+
+# 全域變數，記錄每個 chat_id 的對話記憶
+chat_memories = {}  # {chat_id: memory_object}
+
 # 修復：正確構建 DATABASE_URL
 def get_database_url():
     # 優先使用完整的 DATABASE_URL
@@ -166,6 +190,17 @@ security = HTTPBearer()
 # ─────────────────────────────────────────────────────────────
 app = FastAPI(title="SanShin AI System", version="1.0.0")
 
+# 註冊新的中介層（如果可用）
+if _HAS_MIDDLEWARE:
+    # 統一錯誤處理中介層
+    app.middleware("http")(error_handling_middleware)
+    
+    # 速率限制
+    app.state.limiter = limiter
+    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+    
+    logger.info("✅ 已註冊錯誤處理中介層和速率限制")
+
 # CORS 設定
 app.add_middleware(
     CORSMiddleware,
@@ -213,6 +248,21 @@ else:
     logger.warning(f"前端目錄不存在: {FRONTEND_DIR}")
 
 # ─────────────────────────────────────────────────────────────
+# 輔助函數 - 條件式速率限制
+# ─────────────────────────────────────────────────────────────
+
+def conditional_rate_limit(rate: str):
+    """條件式速率限制：只有在中介層可用時才應用"""
+    def decorator(func):
+        if _HAS_MIDDLEWARE:
+            # 應用速率限制
+            return limiter.limit(rate)(func)
+        else:
+            # 無速率限制，直接返回原函數
+            return func
+    return decorator
+
+# ─────────────────────────────────────────────────────────────
 # 請求模型
 # ─────────────────────────────────────────────────────────────
 class QueryRequest(BaseModel):
@@ -247,6 +297,7 @@ class AskResponse(BaseModel):
     images: Optional[list] = None  # 🆕 個人知識庫圖片
     used_provider: Optional[str] = None  # 🆕 本次使用的 LLM provider
     used_model: Optional[str] = None  # 🆕 本次使用的模型
+    classification: Optional[Dict] = None  # 🆕 智能路由分類資訊
 
 # ─────────────────────────────────────────────────────────────
 # 認證輔助函數
@@ -307,7 +358,8 @@ class CategorizedQASystem:
         if not question.strip():
             return "請輸入有效的問題。", "system", {}
 
-        answer, source_type, cost = self.core_qa.ask(question, mode, user_id)
+        # 使用關鍵字參數確保正確傳遞（SimplifiedQASystem 參數順序是 query, user_id, mode）
+        answer, source_type, cost = self.core_qa.ask(query=question, user_id=user_id, mode=mode)
 
         # 🔄 Fallback（受 USE_CSV_DIRECT 控制）：若是業務查詢但回傳太空，才用 CSV 快查補上
         if USE_CSV_DIRECT and (source_type == "business") and (not answer or len(answer.strip()) < 20):
@@ -435,10 +487,11 @@ async def manifest():
 # ─────────────────────────────────────────────────────────────
 
 @app.post("/login", response_model=LoginResponse)
-async def login(request: LoginRequest):
-    """用戶登入"""
-    account = request.account.strip()
-    password = request.password.strip()
+@conditional_rate_limit("10/minute")
+async def login(request: Request, login_data: LoginRequest): 
+    # 注意：我把原本的參數改名為 login_data 避免與 Request 衝突
+    account = login_data.account.strip()
+    password = login_data.password.strip()
     
     if not account or not password:
         raise HTTPException(status_code=400, detail="帳號和密碼不能為空")
@@ -494,13 +547,28 @@ async def list_users(current_user: User = Depends(get_current_user_from_db)):
 # 紀錄分頁狀態
 business_query_state: Dict[str, Dict[str, Any]] = {}
 
+# ─────────────────────────────────────────────────────────────
+# 問答 API
+# ─────────────────────────────────────────────────────────────
+
 @app.post("/ask", response_model=AskResponse)
-async def ask_endpoint(request: AskRequest, current_user: User = Depends(get_current_user_from_db)):
+@conditional_rate_limit("10/minute")
+async def ask_endpoint(
+    request: Request,  # 用於速率限制
+    req: AskRequest,  # 業務邏輯數據
+    current_user: User = Depends(get_current_user_from_db)
+):
+    """
+    主要問答接口
+    
+    支持自動路由：系統會自動判斷查詢類型（technical/business/personal）
+    也支持手動指定 mode 參數以保持向後兼容
+    """
     global business_query_state
 
     # 🟢 Step1: 分頁「繼續」（僅 CSV 直查模式）
-    if USE_CSV_DIRECT and request.question.strip() == "繼續":
-        state = business_query_state.get(request.chat_id)
+    if USE_CSV_DIRECT and req.question.strip() == "繼續":
+        state = business_query_state.get(req.chat_id)
         if state:
             df, offset = state["df"], state["offset"]
             answer = paginate_business_table(df, offset=offset, page_size=50)
@@ -516,11 +584,11 @@ async def ask_endpoint(request: AskRequest, current_user: User = Depends(get_cur
 
     # 🟢 Step2: 嘗試業務查詢（僅 CSV 直查模式）
     if USE_CSV_DIRECT:
-        df = query_business_df(request.question)
+        df = query_business_df(req.question)
     else:
         df = None
     if df is not None and len(df) > 0:
-        business_query_state[request.chat_id] = {
+        business_query_state[req.chat_id] = {
             "df": df,
             "offset": 50,
         }
@@ -529,13 +597,13 @@ async def ask_endpoint(request: AskRequest, current_user: User = Depends(get_cur
         # ⚠️ 仍然寫入 ChatLog（保持你的功能）
         db: Session = SessionLocal()
         try:
-            title = request.question[:20] + "..." if len(request.question) > 20 else request.question
-            exists = db.query(ChatLog).filter_by(chat_id=request.chat_id).first()
+            title = req.question[:20] + "..." if len(req.question) > 20 else req.question
+            exists = db.query(ChatLog).filter_by(chat_id=req.chat_id).first()
             db.add(ChatLog(
                 user_id=current_user.id,
-                chat_id=request.chat_id,
+                chat_id=req.chat_id,
                 title=None if exists else title,
-                question=request.question,
+                question=req.question,
                 answer=answer,
                 created_at=datetime.utcnow()
             ))
@@ -548,7 +616,7 @@ async def ask_endpoint(request: AskRequest, current_user: User = Depends(get_cur
 
         return AskResponse(
             answer=answer,
-            title=request.question,
+            title=req.question,
             source_type="business_csv",
             sources=["business_csv"]
         )
@@ -560,23 +628,36 @@ async def ask_endpoint(request: AskRequest, current_user: User = Depends(get_cur
 
     db: Session = SessionLocal()
     try:
-        answer, source_type, cost_info = qa.ask(request.question, request.mode, user_id=current_user.account)
-        title = request.question[:20] + "..." if len(request.question) > 20 else request.question
+        # 🆕 使用智能路由（mode=None 啟用自動判斷）
+        answer, source_type, cost_info = qa.ask(req.question, mode=None, user_id=current_user.account)
+        title = req.question[:20] + "..." if len(req.question) > 20 else req.question
 
-        exists = db.query(ChatLog).filter_by(chat_id=request.chat_id).first()
+        exists = db.query(ChatLog).filter_by(chat_id=req.chat_id).first()
         db.add(ChatLog(
             user_id=current_user.id,
-            chat_id=request.chat_id,
+            chat_id=req.chat_id,
             title=None if exists else title,
-            question=request.question,
+            question=req.question,
             answer=answer,
             created_at=datetime.utcnow()
         ))
         db.commit()
 
-        # 🆕 提取圖片資訊（如果有的話）
+        # 提取圖片資訊和來源
         images = cost_info.get("images", []) if isinstance(cost_info, dict) else []
         sources = cost_info.get("sources", [source_type]) if isinstance(cost_info, dict) else [source_type]
+        
+        # 🆕 提取智能路由分類資訊
+        classification = {
+            'detected_type': cost_info.get('detected_type', source_type),
+            'confidence': cost_info.get('confidence', 1.0),
+            'reasoning': cost_info.get('reasoning', ''),
+            'auto_classified': cost_info.get('auto_classified', True),
+        } if isinstance(cost_info, dict) else None
+        
+        # 如果有澄清提示，加到 answer 尾部
+        if isinstance(cost_info, dict) and cost_info.get('clarify_hint'):
+            answer += cost_info['clarify_hint']
 
         return AskResponse(
             answer=answer,
@@ -585,7 +666,8 @@ async def ask_endpoint(request: AskRequest, current_user: User = Depends(get_cur
             sources=sources if sources else None,
             images=images if images else None,
             used_provider=(cost_info or {}).get("used_provider"),
-            used_model=(cost_info or {}).get("used_model")
+            used_model=(cost_info or {}).get("used_model"),
+            classification=classification  # 🆕 新增分類資訊
         )
     except Exception as e:
         db.rollback()
@@ -781,6 +863,35 @@ async def list_files():
     
     return {"frontend_dir": FRONTEND_DIR, "files": files}
 
+@app.get("/system/router-stats")
+async def router_stats(current_user: User = Depends(get_current_user_from_db)):
+    """
+    獲取智能路由器統計數據（需要管理員權限）
+    """
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="權限不足")
+    
+    try:
+        from query_router import get_router
+        router = get_router()
+        stats = router.get_stats()
+        
+        return {
+            "success": True,
+            "stats": stats,
+            "thresholds": {
+                "fast_rule": router.FAST_RULE_THRESHOLD,
+                "mixed_search": router.MIXED_SEARCH_THRESHOLD,
+                "clarify": router.CLARIFY_THRESHOLD,
+            }
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e),
+            "message": "路由器統計不可用"
+        }
+
 # ─────────────────────────────────────────────────────────────
 # 錯誤處理
 # ─────────────────────────────────────────────────────────────
@@ -817,11 +928,13 @@ except ImportError as e:
 
 
 @app.post("/kb/personal/upload")
+@conditional_rate_limit("20/hour")
 async def upload_personal_document(
+    request: Request,  # <--- 必須加上這一行
     file: UploadFile = File(...),
     user_account: str = Query(default="default"),
 ):
-    """上傳文件到個人知識庫"""
+    """上傳文件到個人知識庫（已啟用速率限制：20次/小時）"""
     if not PERSONAL_KB_ENABLED:
         raise HTTPException(status_code=503, detail="個人知識庫功能未啟用")
     

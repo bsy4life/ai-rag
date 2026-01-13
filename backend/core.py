@@ -1293,7 +1293,7 @@ class CategorizedQASystem:
     def ask(
         self,
         query: str,
-        mode: str = "smart",
+        mode: Optional[str] = None,  # 改為可選，None 表示啟用智能路由
         user_id: str = "default",
     ) -> Tuple[str, str, Dict]:
         """
@@ -1301,7 +1301,7 @@ class CategorizedQASystem:
         
         Args:
             query: 查詢內容
-            mode: smart, technical, business, personal
+            mode: None (自動判斷) | technical | business | personal | smart (向後兼容)
             user_id: 用戶 ID
         
         Returns:
@@ -1312,18 +1312,60 @@ class CategorizedQASystem:
         
         query = query.strip()
         
+        # ========== 🆕 智能路由器整合 ==========
+        classification_info = {}
+        
+        if mode is None or mode == "smart":
+            # 使用智能路由器
+            try:
+                from query_router import get_router
+                decision = get_router().route(query, user_id)
+                
+                classification_info = {
+                    'detected_type': decision.query_type,
+                    'confidence': decision.confidence,
+                    'reasoning': decision.reasoning,
+                    'auto_classified': True,
+                }
+                
+                # 信心度足夠，直接採用
+                if decision.confidence >= 0.70:
+                    mode = decision.query_type
+                    logger.info(f"🎯 路由決策: {mode} (信心度: {decision.confidence:.0%})")
+                else:
+                    # 信心度不足，執行混合搜尋
+                    if decision.should_clarify:
+                        classification_info['clarify_hint'] = self._generate_clarify_hint(query)
+                    
+                    return self._mixed_search(query, decision.fallback_types, classification_info, user_id)
+            except Exception as e:
+                logger.warning(f"路由器異常，降級到舊版分類: {e}")
+                # 降級到舊版分類
+                mode = "smart"
+        else:
+            # 手動指定模式（向後兼容）
+            classification_info = {
+                'detected_type': mode,
+                'confidence': 1.0,
+                'reasoning': '用戶手動指定',
+                'auto_classified': False,
+            }
+        
+        # ========== 原有邏輯（加入分類資訊） ==========
         # 檢查快取
-        cached = self.cache.get(query, mode, user_id)
+        cache_mode = mode or "smart"
+        cached = self.cache.get(query, cache_mode, user_id)
         if cached:
             return cached.answer, cached.source_type, {
+                **classification_info,
                 "images": cached.images,
                 "sources": cached.sources,
                 "cost_estimate": cached.cost_estimate,
                 "from_cache": True,
             }
         
-        # Smart 模式：先檢查個人知識庫
-        if mode == "smart" and user_id and user_id != "default":
+        # Smart 模式或 Personal：先檢查個人知識庫
+        if mode in ("smart", "personal") and user_id and user_id != "default":
             personal_result = self._ask_personal(query, user_id)
             if personal_result and "未找到" not in personal_result[0] and "尚無文件" not in personal_result[0]:
                 # 快取結果
@@ -1333,31 +1375,45 @@ class CategorizedQASystem:
                     source_type="personal",
                     images=personal_result[2].get("images", []),
                 )
-                self.cache.set(query, mode, result, user_id)
-                return personal_result
+                self.cache.set(query, cache_mode, result, user_id)
+                
+                # 加入分類資訊
+                return (
+                    personal_result[0],
+                    personal_result[1],
+                    {**personal_result[2], **classification_info}
+                )
         
-        # 判斷查詢類型
+        # 判斷查詢類型（如果還是 smart 模式，使用舊版分類器）
         if mode == "smart":
             doc_type = QueryClassifier.classify_query(query)
         elif mode == "personal":
             return self._ask_personal(query, user_id)
+        elif mode == "business":
+            answer, source_type, info = self._ask_business(query)
+            return answer, source_type, {**info, **classification_info}
+        elif mode == "technical":
+            doc_type = DocumentType.TECHNICAL
         else:
-            doc_type = DocumentType(mode) if mode in ["technical", "business"] else DocumentType.TECHNICAL
+            doc_type = DocumentType.TECHNICAL
         
         # 業務查詢
         if doc_type == DocumentType.BUSINESS:
-            return self._ask_business(query)
+            answer, source_type, info = self._ask_business(query)
+            return answer, source_type, {**info, **classification_info}
         
         # 技術查詢：三層檢索
         search_results = self._search(query, doc_type.value)
         
         if not search_results:
-            return "未找到相關資料。請嘗試不同的關鍵字。", doc_type.value, {}
+            hint = classification_info.get('clarify_hint', '')
+            return f"未找到相關資料。請嘗試不同的關鍵字。{hint}", doc_type.value, classification_info
         
         # 生成回答
         answer, cost = self._generate_answer(query, search_results, doc_type.value)
         
         info = {
+            **classification_info,
             "sources": [r.source for r in search_results if r.source],
             "cost_estimate": cost,
             "from_cache": False,
@@ -1370,7 +1426,7 @@ class CategorizedQASystem:
             source_type=doc_type.value,
             cost_estimate=cost,
         )
-        self.cache.set(query, mode, result, user_id)
+        self.cache.set(query, cache_mode, result, user_id)
         
         return answer, doc_type.value, info
     
@@ -1498,6 +1554,77 @@ class CategorizedQASystem:
         except Exception as e:
             logger.error(f"個人知識庫查詢失敗: {e}")
             return f"查詢失敗：{e}", "error", {}
+    
+    def _mixed_search(
+        self, 
+        query: str, 
+        search_types: List[str],
+        classification_info: Dict,
+        user_id: str = "default"
+    ) -> Tuple[str, str, Dict]:
+        """
+        混合搜尋: 同時搜尋多個來源並合併結果
+        
+        用於信心度不足的情況
+        """
+        logger.info(f"🔀 執行混合搜尋: {search_types}")
+        
+        all_results = []
+        all_sources = []
+        
+        # 並行搜尋各來源
+        for search_type in search_types:
+            try:
+                if search_type == 'technical' and self._vectordb:
+                    results = self._search(query, 'technical', top_k=5)
+                    all_results.extend([(r, 'technical') for r in results])
+                    all_sources.extend([r.source for r in results if r.source])
+                
+                elif search_type == 'business':
+                    # 業務查詢通常直接返回答案
+                    biz_answer, _, biz_info = self._ask_business(query)
+                    if biz_answer and "未找到" not in biz_answer and "失敗" not in biz_answer:
+                        # 業務查詢成功，直接返回
+                        return biz_answer, 'business', {**biz_info, **classification_info}
+                
+                elif search_type == 'personal' and user_id and user_id != "default":
+                    personal_answer, _, personal_info = self._ask_personal(query, user_id)
+                    if personal_answer and "未找到" not in personal_answer and "尚無文件" not in personal_answer:
+                        # 個人知識庫有結果，直接返回
+                        return personal_answer, 'personal', {**personal_info, **classification_info}
+            
+            except Exception as e:
+                logger.warning(f"搜尋 {search_type} 時出錯: {e}")
+        
+        # 沒有找到任何結果
+        if not all_results:
+            hint = classification_info.get('clarify_hint', '')
+            answer = f"未找到相關資料。{hint}"
+            return answer, 'mixed', classification_info
+        
+        # 合併結果並生成回答
+        # 使用 Reranker 重新排序
+        technical_results = [r for r, t in all_results if t == 'technical']
+        if technical_results:
+            technical_results = self.reranker.rerank(query, technical_results)
+        
+        answer, cost = self._generate_answer(query, technical_results[:8], 'mixed')
+        
+        return answer, 'mixed', {
+            **classification_info,
+            'sources': list(set(all_sources))[:10],  # 去重並限制數量
+            'cost_estimate': cost,
+        }
+    
+    def _generate_clarify_hint(self, query: str) -> str:
+        """生成澄清提示"""
+        return (
+            "\n\n💡 **提示**: 您的問題可能需要更具體的描述。"
+            "您可以:\n"
+            "- 提供產品型號 (如: MXJ16-20)\n"
+            "- 指定查詢類型 (技術文檔/業務記錄/個人筆記)\n"
+            "- 使用更明確的關鍵字"
+        )
     
     def reload(self) -> bool:
         """重新載入系統"""

@@ -437,27 +437,22 @@
       <!-- 輸入區 -->
       <div class="p-4 bg-white dark:bg-sand-800 border-t border-sand-200 dark:border-sand-700">
         <div class="max-w-3xl mx-auto space-y-3">
-          <!-- 模式選擇 -->
-          <div class="flex justify-center">
-            <div class="mode-selector">
-              <button class="mode-btn active" data-mode="smart" onclick="setMode('smart')">🧠 智慧</button>
-              <button class="mode-btn" data-mode="technical" onclick="setMode('technical')">🔧 技術</button>
-              <button class="mode-btn" data-mode="business" onclick="setMode('business')">📊 業務</button>
-              <button class="mode-btn" data-mode="personal" onclick="setMode('personal')">👤 個人</button>
-            </div>
+          <!-- 🆕 簡化版提示 -->
+          <div class="flex items-center justify-center gap-2">
+            <p class="text-xs text-sand-500">
+              💡 AI 會自動識別您的查詢類型
+            </p>
           </div>
           
           <!-- 輸入框 -->
           <div class="input-wrapper flex items-end gap-2 p-2">
-            <textarea id="input" rows="1" class="flex-1 px-3 py-2 bg-transparent border-none outline-none resize-none text-sand-800 dark:text-sand-100 text-sm" placeholder="輸入問題..." onkeydown="handleKey(event)"></textarea>
+            <textarea id="input" rows="1" class="flex-1 px-3 py-2 bg-transparent border-none outline-none resize-none text-sand-800 dark:text-sand-100 text-sm" placeholder="輸入您的問題..." onkeydown="handleKey(event)"></textarea>
             <button onclick="sendMessage()" class="p-2 rounded-lg bg-gradient-to-br from-claude-500 to-claude-600 text-white hover:shadow-lg transition">
               <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"></path>
               </svg>
             </button>
           </div>
-          
-          <p id="mode-hint" class="text-xs text-center text-sand-400">🧠 智慧模式：AI 會自動判斷資料來源</p>
         </div>
       </div>
     </main>

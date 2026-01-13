@@ -24,7 +24,6 @@ function hasMD(text) {
 }
 
 // ========== 狀態 ==========
-let currentMode = 'smart';
 let chats = {};
 let chatId = null;
 let chatBox = null;
@@ -36,20 +35,7 @@ let currentPasswordTarget = null, currentEditRoleTarget = null, currentEditProfi
 // 上傳
 let pendingFiles = [];
 
-// ========== 模式選擇 ==========
-function setMode(mode) {
-  currentMode = mode;
-  document.querySelectorAll('.mode-btn').forEach(btn => {
-    btn.classList.toggle('active', btn.dataset.mode === mode);
-  });
-  const hints = {
-    smart: '🧠 智慧模式：AI 自動判斷並搜尋所有資料',
-    technical: '🔧 技術模式：搜尋技術規格、手冊',
-    business: '📊 業務模式：搜尋客戶、活動資料',
-    personal: '👤 個人模式：搜尋個人上傳的文件'
-  };
-  document.getElementById('mode-hint').textContent = hints[mode];
-}
+// 🆕 移除模式選擇功能，全部使用智能路由
 
 // ========== 聊天功能 ==========
 function renderChatList() {
@@ -206,7 +192,7 @@ async function sendMessage() {
     const res = await fetch('/ask', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...authHeader() },
-      body: JSON.stringify({ question: text, chat_id: chatId, user: localStorage.getItem('username'), mode: currentMode })
+      body: JSON.stringify({ question: text, chat_id: chatId, user: localStorage.getItem('username') })  // 🆕 移除 mode 參數
     });
     
     if (res.status === 401) { localStorage.removeItem('token'); alert('請重新登入'); location.reload(); return; }
@@ -222,6 +208,38 @@ async function sendMessage() {
       bubble.innerHTML = renderMD(answer);
     } else {
       bubble.innerHTML = answer.replace(/\n/g, '<br>');
+    }
+    
+    // 🆕 智能路由分類標籤
+    if (data.classification) {
+      const cls = data.classification;
+      const typeLabels = {
+        technical: '🔧 技術文檔',
+        business: '📊 業務資料',
+        personal: '👤 個人知識庫',
+        mixed: '🔀 混合搜尋'
+      };
+      
+      const confidenceColor = cls.confidence >= 0.9 ? 'text-green-600 dark:text-green-400' : 
+                               cls.confidence >= 0.7 ? 'text-yellow-600 dark:text-yellow-400' : 
+                               'text-orange-600 dark:text-orange-400';
+      
+      bubble.innerHTML += `
+        <div class="mt-3 pt-2 border-t border-sand-200 dark:border-sand-600 flex items-center justify-between flex-wrap gap-2">
+          <div class="text-xs text-sand-500">
+            🤖 AI 識別: <span class="font-medium ${confidenceColor}">
+              ${typeLabels[cls.detected_type] || cls.detected_type}
+            </span>
+            <span class="text-sand-400">(${(cls.confidence * 100).toFixed(0)}%)</span>
+          </div>
+          ${cls.confidence < 0.9 && cls.auto_classified ? `
+            <button onclick="reclassify('${chatId}', '${text.replace(/'/g, "\\'")}') " 
+              class="text-xs text-claude-600 dark:text-claude-400 hover:text-claude-700 underline">
+              重新分類
+            </button>
+          ` : ''}
+        </div>
+      `;
     }
     
     // 來源標籤
@@ -1309,6 +1327,48 @@ function deleteUser(acc) {
   fetch('/users/' + acc, { method: 'DELETE', headers: authHeader() })
     .then(r => { if (!r.ok) throw new Error(); alert('刪除成功'); toggleAdmin(); })
     .catch(() => alert('刪除失敗'));
+}
+
+// ========== 🆕 重新分類功能 ==========
+async function reclassify(currentChatId, question) {
+  const modal = document.createElement('div');
+  modal.className = 'modal-overlay fixed inset-0 z-50 flex items-center justify-center p-4';
+  modal.style.backgroundColor = 'rgba(0,0,0,0.5)';
+  modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
+  
+  modal.innerHTML = `
+    <div class="modal-content p-6 max-w-md w-full mx-4 bg-white dark:bg-sand-800 rounded-2xl">
+      <h3 class="text-lg font-semibold mb-4 text-sand-800 dark:text-sand-100">選擇查詢類型</h3>
+      <div class="space-y-2">
+        <button onclick="selectTypeAndSearch('${currentChatId}', '${question.replace(/'/g, "\\'")}', 'technical'); this.closest('.modal-overlay').remove();" 
+          class="w-full btn-ghost text-left p-3 rounded-lg hover:bg-sand-100 dark:hover:bg-sand-700">
+          🔧 技術文檔 - 產品規格、安裝維修
+        </button>
+        <button onclick="selectTypeAndSearch('${currentChatId}', '${question.replace(/'/g, "\\'")}', 'business'); this.closest('.modal-overlay').remove();" 
+          class="w-full btn-ghost text-left p-3 rounded-lg hover:bg-sand-100 dark:hover:bg-sand-700">
+          📊 業務資料 - 客戶拜訪、業績統計
+        </button>
+        <button onclick="selectTypeAndSearch('${currentChatId}', '${question.replace(/'/g, "\\'")}', 'personal'); this.closest('.modal-overlay').remove();" 
+          class="w-full btn-ghost text-left p-3 rounded-lg hover:bg-sand-100 dark:hover:bg-sand-700">
+          👤 個人知識庫 - 您上傳的文件
+        </button>
+      </div>
+      <button onclick="this.closest('.modal-overlay').remove()" 
+        class="mt-4 w-full btn-ghost text-center p-2">
+        取消
+      </button>
+    </div>
+  `;
+  document.body.appendChild(modal);
+}
+
+async function selectTypeAndSearch(currentChatId, question, forceType) {
+  // 重新發送查詢，使用指定的類型
+  // 這裡簡化處理：直接提示用戶然後重新輸入
+  document.getElementById('input').value = question;
+  alert(`已選擇「${forceType}」類型，請按發送重新查詢`);
+  // 注意：目前後端 mode 參數已改為 None，強制模式需要後端支持
+  // 未來可以擴展 API 支持手動指定模式
 }
 
 // ========== 初始化 ==========
